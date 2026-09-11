@@ -1,0 +1,9 @@
+# 运行时由 Runner 生成，禁止提交
+/config.toml
+
+__pycache__/
+*.pyc
+
+# 本地验证样张/临时产物
+*.jpg.tmp
+tests/out/
