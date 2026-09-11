@@ -64,16 +64,6 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 
 `send.text`、`send.image`、`maisaka.context.append`。修改 manifest 中的能力声明后必须完整重启 MaiBot。
 
-## 本地离线验证
-
-不启动 MaiBot 的结构自检（组件声明、命令正则、配置默认值、manifest、存储与渲染逻辑、一言连通性）：
-
-```
-python tests/verify.py
-```
-
-`tests/stub_maibot_sdk.py` 为 SDK 桩，仅覆盖本插件用到的 API 面，用于离线导入。
-
 ## 持续更新
 
 本插件会持续更新：后续计划加入更多娱乐功能，并持续优化现有体验。
