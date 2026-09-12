@@ -9,24 +9,42 @@ from __future__ import annotations
 import asyncio
 import base64
 import datetime
+import importlib.util
 import sys
 from pathlib import Path
 from typing import Any, ClassVar
 
-# 保证无论 Runner 以何种方式导入 plugin.py，本插件目录都在 sys.path 上，
-# 同目录核心模块（essential_*）可被导入；目录内模块名带插件前缀，避免与其他插件撞名。
-_PLUGIN_DIR = str(Path(__file__).resolve().parent)
-if _PLUGIN_DIR not in sys.path:
-    sys.path.insert(0, _PLUGIN_DIR)
-
 from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.types import CONFIG_RELOAD_SCOPE_SELF, ToolParameterInfo, ToolParamType
 
-from essential_render_card import render_report_card, report_output_path
-from essential_services import fetch_hitokoto
-from essential_storage import AnswerBook, FoodStore, GoodMorningStore
+_PLUGIN_DIR = Path(__file__).resolve().parent
 
-SUPPORTED_CONFIG_VERSION = "1.0.0"  # 与 manifest version 保持同步
+
+def _load_sibling_module(stem: str) -> Any:
+    """以受控方式加载同目录核心模块：不改动 Runner 的全局 sys.path，
+    模块以"maibot_fun_pack_"前缀注册进 sys.modules，避免与其他插件或宿主模块撞名。"""
+    module_name = f"maibot_fun_pack_{stem}"
+    spec = importlib.util.spec_from_file_location(module_name, _PLUGIN_DIR / f"{stem}.py")
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法定位核心模块: {stem}.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_services = _load_sibling_module("essential_services")
+_storage = _load_sibling_module("essential_storage")
+_render = _load_sibling_module("essential_render_card")
+
+fetch_hitokoto = _services.fetch_hitokoto
+AnswerBook = _storage.AnswerBook
+FoodStore = _storage.FoodStore
+GoodMorningStore = _storage.GoodMorningStore
+render_report_card = _render.render_report_card
+report_output_path = _render.report_output_path
+
+SUPPORTED_CONFIG_VERSION = "1.0.1"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -116,9 +134,9 @@ class EssentialPlugin(MaiBotPlugin):
 
     async def on_load(self) -> None:
         data_dir = self.ctx.paths.data_dir
-        self._food = FoodStore(data_dir / "food.json", Path(_PLUGIN_DIR) / "assets" / "food.json")
+        self._food = FoodStore(data_dir / "food.json", _PLUGIN_DIR / "assets" / "food.json")
         self._good_morning = GoodMorningStore(data_dir / "good_morning.json")
-        self._answer_book = AnswerBook(Path(_PLUGIN_DIR) / "assets" / "answer_book.json")
+        self._answer_book = AnswerBook(_PLUGIN_DIR / "assets" / "answer_book.json")
         await asyncio.to_thread(self._food.load)
         await asyncio.to_thread(self._good_morning.load)
         await asyncio.to_thread(self._answer_book.load)
@@ -174,8 +192,8 @@ class EssentialPlugin(MaiBotPlugin):
 
     async def _send_report_card(self, *, happy: bool, text: str, stream_id: str) -> None:
         """渲染喜报/悲报并发送图片；发送失败时降级为文本提示。"""
-        bg = Path(_PLUGIN_DIR) / "assets" / ("congrats.jpg" if happy else "uncongrats.jpg")
-        font = Path(_PLUGIN_DIR) / "assets" / "simhei.ttf"
+        bg = _PLUGIN_DIR / "assets" / ("congrats.jpg" if happy else "uncongrats.jpg")
+        font = _PLUGIN_DIR / "assets" / "NotoSansSC.ttf"
         out_path = report_output_path(self.ctx.paths.runtime_dir, happy)
         fill = (255, 0, 0) if happy else (0, 0, 0)
         stroke = (255, 255, 0) if happy else (255, 255, 255)

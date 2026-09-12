@@ -75,3 +75,5 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
   [astrbot_plugin_essential](https://github.com/Soulter/astrbot_plugin_essential)（Soulter / FateTrial），MIT License
 - 一言数据源：[v1.hitokoto.cn](https://v1.hitokoto.cn/)
 - 早晚安玩法灵感：[nonebot_plugin_morning](https://github.com/MinatoAquaCrews/nonebot_plugin_morning)
+- 喜报/悲报字体：[Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC)（Google，SIL Open Font License 1.1，
+  许可文本见 `assets/OFL.txt`，允许随本项目再分发）

@@ -38,6 +38,10 @@ def render_report_card(
     img = Image.open(bg_path)
     draw = ImageDraw.Draw(img)
     font = ImageFont.truetype(str(font_path), int(font_size))
+    try:
+        font.set_variation_by_name("Bold")  # 可变字体（如 Noto Sans SC）加粗；静态字体自动跳过
+    except Exception:
+        pass
 
     text_width, text_height = draw.textbbox((0, 0), msg, font=font)[2:4]
     x = (img.size[0] - text_width) / 2

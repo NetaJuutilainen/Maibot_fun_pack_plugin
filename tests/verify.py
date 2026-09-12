@@ -140,7 +140,7 @@ def main() -> int:
 
     # ---- 3. 配置模型默认值 ------------------------------------------------
     cfg = plugin.EssentialConfig()
-    check("config_version 默认值存在", cfg.plugin.config_version == "1.0.0",
+    check("config_version 默认值存在", cfg.plugin.config_version == "1.0.1",
           f"实际: {cfg.plugin.config_version!r}")
     check("report.font_size 默认 65", cfg.report.font_size == 65)
     check("good_morning.cooldown_minutes 默认 30", cfg.good_morning.cooldown_minutes == 30)
@@ -230,7 +230,7 @@ def main() -> int:
     # ---- 6. 渲染层 --------------------------------------------------------
     with tempfile.TemporaryDirectory() as td:
         out = Path(td) / "card.jpg"
-        render_report_card(ASSETS / "congrats.jpg", ASSETS / "simhei.ttf",
+        render_report_card(ASSETS / "congrats.jpg", ASSETS / "NotoSansSC.ttf",
                            "恭喜张三同学成功上岸！！可喜可贺可喜可贺", 65, out,
                            (255, 0, 0), (255, 255, 0))
         ok = out.exists() and out.stat().st_size > 10_000
@@ -240,7 +240,7 @@ def main() -> int:
             check("喜报图片可被 PIL 重新打开", im.size == (1280, 720) or im.size[0] > 0, f"size={im.size}")
 
         out2 = Path(td) / "uncard.jpg"
-        render_report_card(ASSETS / "uncongrats.jpg", ASSETS / "simhei.ttf",
+        render_report_card(ASSETS / "uncongrats.jpg", ASSETS / "NotoSansSC.ttf",
                            "悲报，今天什么都没发生", 65, out2, (0, 0, 0), (255, 255, 255))
         check("悲报渲染输出", out2.exists() and out2.stat().st_size > 10_000)
 
