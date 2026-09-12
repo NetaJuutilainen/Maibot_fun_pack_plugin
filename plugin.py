@@ -390,11 +390,11 @@ class EssentialPlugin(MaiBotPlugin):
         items = str(groups.get("items") or "").strip()
         stream_id = self._stream_id(kwargs)
 
-            if action:
-                # 带图消息的文本尾部会带 [图片：AI 描述] 占位符，先剥掉再解析
-                items = strip_bracket_placeholders(items)
-                names = [n for n in items.split() if "[" not in n and "]" not in n]
-                self.ctx.logger.info("今天吃什么：items=%r names=%r", items, names)
+        if action:
+            # 带图消息的文本尾部会带 [图片：AI 描述] 占位符，先剥掉再解析
+            items = strip_bracket_placeholders(items)
+            names = [n for n in items.split() if "[" not in n and "]" not in n]
+            self.ctx.logger.info("今天吃什么：items=%r names=%r", items, names)
             if not names:
                 await self.ctx.send.text(f"格式：/今天吃什么 {action} [食物1] [食物2] ...", stream_id)
                 return False, "缺少食物名", True
