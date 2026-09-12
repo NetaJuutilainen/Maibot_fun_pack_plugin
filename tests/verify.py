@@ -152,7 +152,7 @@ def main() -> int:
 
     # ---- 3. 配置模型默认值 ------------------------------------------------
     cfg = plugin.EssentialConfig()
-    check("config_version 默认值存在", cfg.plugin.config_version == "1.2.2",
+    check("config_version 默认值存在", cfg.plugin.config_version == "1.3.0",
           f"实际: {cfg.plugin.config_version!r}")
     check("report.font_size 默认 65", cfg.report.font_size == 65)
     check("good_morning.cooldown_minutes 默认 30", cfg.good_morning.cooldown_minutes == 30)
@@ -185,7 +185,6 @@ def main() -> int:
     known_caps = {
         "send.text", "send.image", "send.hybrid", "maisaka.context.append",
         "chat.get_stream_by_group_id", "chat.get_stream_by_user_id",
-        "message.get_by_id",
     }
     check("capabilities 全部为已知能力名", set(manifest["capabilities"]) <= known_caps,
           f"未知: {set(manifest['capabilities']) - known_caps}")

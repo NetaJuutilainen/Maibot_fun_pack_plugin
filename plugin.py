@@ -11,6 +11,7 @@ import asyncio
 import base64
 import datetime
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from typing import Any, ClassVar
@@ -58,7 +59,7 @@ PassiveResponder = _passive_eat.PassiveResponder
 FoodImageIndex = _passive_eat.FoodImageIndex
 sniff_image_ext = _passive_eat.sniff_image_ext
 
-SUPPORTED_CONFIG_VERSION = "1.2.2"  # 与 manifest version 保持同步
+SUPPORTED_CONFIG_VERSION = "1.3.0"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -409,8 +410,7 @@ class EssentialPlugin(MaiBotPlugin):
                     self.ctx.logger.info("今天吃什么：命令消息段类型 %s", seg_types)
                 bound = 0
                 if has_attached and len(names) == 1:
-                    message_id = str((kwargs.get("message") or {}).get("message_id") or "")
-                    bound = await self._save_attached_food_images(names[0], message_id)
+                    bound = await self._save_attached_food_images(names[0], segs)
                     if bound:
                         await asyncio.to_thread(self._food_images.reload)
                 total = len(self._food.items)
@@ -579,53 +579,56 @@ class EssentialPlugin(MaiBotPlugin):
         except OSError:
             return None
 
-    async def _save_attached_food_images(self, food: str, message_id: str) -> int:
-        """把命令消息附带的图片保存为该食物的绑定图，返回保存张数。
+    async def _save_attached_food_images(self, food: str, segments: list) -> int:
+        """把命令消息附带的图片按 hash 从宿主图片库定位并保存，返回保存张数。
 
-        命令载荷不含二进制数据，需按 message_id 回查含二进制的消息详情（图片按
-        hash 从宿主图片库回填）。消息落库与命令执行存在时差，查询为空时短重试。
+        命令载荷不含二进制，但图片段带 sha256 hash；宿主图片库按
+        data/images/<hash>.<ext>（表情为 data/emoji/）落盘，直接探测读取，
+        避开宿主数据库连接池的旧快照问题（get_by_id 在命令时刻查不到新消息）。
         """
-        if not message_id:
-            return 0
-        detail = None
-        delays = (0.0, 0.7, 1.6, 3.0)
-        for i, delay in enumerate(delays):
-            if delay:
-                await asyncio.sleep(delay)
-            try:
-                detail = await self.ctx.message.get_by_id(message_id, include_binary_data=True)
-            except Exception as e:  # noqa: BLE001
-                self.ctx.logger.warning("获取消息详情失败，无法绑定附带图片: %s", e)
-                return 0
-            if isinstance(detail, dict) and detail.get("raw_message"):
-                break
-            if i < len(delays) - 1:
-                self.ctx.logger.info("消息 %s 尚未可查（第 %d 次），稍后重试", message_id, i + 1)
-        if not isinstance(detail, dict):
-            self.ctx.logger.warning("重试后仍未查到消息 %s，放弃绑定附带图片", message_id)
-            return 0
-        raw = detail.get("raw_message") or []
-        if not raw:
-            self.ctx.logger.warning(
-                "get_by_id 回查无 raw_message（返回键: %s）", sorted(detail.keys()))
-        payloads = []
-        for seg in raw:
-            if not isinstance(seg, dict) or seg.get("type") not in ("image", "emoji"):
+        saved = 0
+        host_data_dir = Path(self.ctx.paths.data_dir).parent.parent
+        for seg in segments:
+            if not isinstance(seg, dict):
                 continue
-            b64 = seg.get("binary_data_base64")
-            if isinstance(b64, str) and b64:
-                payloads.append(b64)
+            seg_type = str(seg.get("type") or "")
+            image_hash = str(seg.get("hash") or "").strip().lower()
+            if not self._IMAGE_HASH_RE.match(image_hash):
+                if seg_type in ("image", "emoji"):
+                    self.ctx.logger.warning(
+                        "图片段 hash 缺失或格式异常，跳过绑定（type=%s）", seg_type
+                    )
+                continue
+            data = await asyncio.to_thread(
+                self._read_host_image_bytes, host_data_dir, seg_type, image_hash
+            )
+            if data:
+                saved += await asyncio.to_thread(self._food_images.save_image, food, data)
             else:
                 self.ctx.logger.warning(
-                    "get_by_id 图片段缺 binary_data_base64（字段: %s）", sorted(seg.keys()))
-        saved = 0
-        for b64 in payloads:
-            try:
-                data = base64.b64decode(b64)
-            except Exception:  # noqa: BLE001
-                continue
-            saved += await asyncio.to_thread(self._food_images.save_image, food, data)
+                    "宿主图片库中未找到 %s（探测数据目录: %s）",
+                    image_hash[:16], host_data_dir,
+                )
         return saved
+
+    _IMAGE_HASH_RE = re.compile(r"^[a-f0-9]{64}$")
+
+    @staticmethod
+    def _read_host_image_bytes(
+        host_data_dir: Path, seg_type: str, image_hash: str
+    ) -> bytes | None:
+        """按宿主图片库的落盘约定（<数据目录>/<images|emoji>/<hash>.<ext>）读取图片。"""
+        exts = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+        dirs = ("emoji", "images") if seg_type == "emoji" else ("images", "emoji")
+        for sub in dirs:
+            for ext in exts:
+                path = host_data_dir / sub / f"{image_hash}{ext}"
+                try:
+                    if path.is_file():
+                        return path.read_bytes()
+                except OSError:
+                    continue
+        return None
 
     async def _resolve_stream_id(self, message: dict, group_id: str, user_id: str) -> str:
         """Hook 载荷里 session_id 可能缺失，按群号/用户号回查聊天流。"""
