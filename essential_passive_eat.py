@@ -18,6 +18,19 @@ logger = logging.getLogger(__name__)
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 
 
+def sniff_image_ext(data: bytes) -> str:
+    """按魔数判断图片扩展名；未识别时默认 .jpg。"""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if data[:3] == b"GIF":
+        return ".gif"
+    if data[:4] == b"RIFF" and len(data) >= 12 and data[8:12] == b"WEBP":
+        return ".webp"
+    if data[:2] == b"BM":
+        return ".bmp"
+    return ".jpg"
+
+
 class PassiveRateLimiter:
     """按会话记录响应频率：窗口内超限或处于复读冷却时，强制推荐而非复读。"""
 
@@ -156,3 +169,26 @@ class FoodImageIndex:
 
     def foods_with_images(self) -> list[str]:
         return sorted(self._index)
+
+    _ILLEGAL_FILENAME = re.compile(r'[\\/:*?"<>|\r\n]')
+
+    def save_image(self, food: str, data: bytes) -> int:
+        """把图片字节保存为 food 的绑定图，成功返回 1；内容重复或食物名非法返回 0。"""
+        safe_food = self._ILLEGAL_FILENAME.sub("", str(food)).strip()
+        if not safe_food or len(data) < 64:
+            return 0
+        ext = sniff_image_ext(data)
+        self.folder.mkdir(parents=True, exist_ok=True)
+        target = self.folder / f"{safe_food}{ext}"
+        n = 1
+        while target.exists():
+            try:
+                if target.read_bytes() == data:
+                    return 0  # 同一张图已经绑定过
+            except OSError:
+                pass
+            target = self.folder / f"{safe_food}_{n}{ext}"
+            n += 1
+        target.write_bytes(data)
+        self._last_scan = 0.0  # 让下次读取立即重扫，新图马上可用
+        return 1

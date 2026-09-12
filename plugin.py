@@ -55,8 +55,9 @@ _passive_eat = _load_sibling_module("essential_passive_eat")
 PassiveRateLimiter = _passive_eat.PassiveRateLimiter
 PassiveResponder = _passive_eat.PassiveResponder
 FoodImageIndex = _passive_eat.FoodImageIndex
+sniff_image_ext = _passive_eat.sniff_image_ext
 
-SUPPORTED_CONFIG_VERSION = "1.1.1"  # 与 manifest version 保持同步
+SUPPORTED_CONFIG_VERSION = "1.2.0"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -390,12 +391,34 @@ class EssentialPlugin(MaiBotPlugin):
                 await self.ctx.send.text(f"格式：/今天吃什么 {action} [食物1] [食物2] ...", stream_id)
                 return False, "缺少食物名", True
             if action == "添加":
+                before = set(self._food.items)
                 added = self._food.add(names)
                 await asyncio.to_thread(self._food.save)
-                await self.ctx.send.text(
-                    f"添加成功（新增 {added} 个），现在共 {len(self._food.items)} 个食物。",
-                    stream_id,
+                segs = (kwargs.get("message") or {}).get("raw_message") or []
+                has_attached = any(
+                    isinstance(s, dict) and s.get("type") in ("image", "emoji") for s in segs
                 )
+                bound = 0
+                if has_attached and len(names) == 1:
+                    message_id = str((kwargs.get("message") or {}).get("message_id") or "")
+                    bound = await self._save_attached_food_images(names[0], message_id)
+                    if bound:
+                        await asyncio.to_thread(self._food_images.reload)
+                total = len(self._food.items)
+                if bound and names[0] not in before:
+                    reply = f"已添加 {names[0]}，并绑定 {bound} 张图片。现在共 {total} 个食物。"
+                elif bound:
+                    reply = f"{names[0]} 已在清单中，新增绑定 {bound} 张图片。"
+                elif has_attached and len(names) > 1:
+                    reply = (
+                        f"添加成功（新增 {added} 个），现在共 {total} 个食物。"
+                        "附带图片未绑定：一次只添加一个食物时才会绑定图片。"
+                    )
+                elif has_attached and bound == 0:
+                    reply = f"添加成功（新增 {added} 个），但没能从消息里取到图片数据。现在共 {total} 个食物。"
+                else:
+                    reply = f"添加成功（新增 {added} 个），现在共 {total} 个食物。"
+                await self.ctx.send.text(reply, stream_id)
             else:
                 removed = self._food.remove(names)
                 await asyncio.to_thread(self._food.save)
@@ -546,6 +569,37 @@ class EssentialPlugin(MaiBotPlugin):
             return base64.b64encode(Path(path).read_bytes()).decode("ascii")
         except OSError:
             return None
+
+    async def _save_attached_food_images(self, food: str, message_id: str) -> int:
+        """把命令消息附带的图片保存为该食物的绑定图，返回保存张数。
+
+        命令载荷不含二进制数据，需按 message_id 回查含二进制的消息详情。
+        """
+        if not message_id:
+            return 0
+        try:
+            detail = await self.ctx.message.get_by_id(message_id, include_binary_data=True)
+        except Exception as e:  # noqa: BLE001
+            self.ctx.logger.warning("获取消息详情失败，无法绑定附带图片: %s", e)
+            return 0
+        if not isinstance(detail, dict):
+            return 0
+        payloads = [
+            seg.get("binary_data_base64")
+            for seg in (detail.get("raw_message") or [])
+            if isinstance(seg, dict)
+            and seg.get("type") in ("image", "emoji")
+            and isinstance(seg.get("binary_data_base64"), str)
+            and seg.get("binary_data_base64")
+        ]
+        saved = 0
+        for b64 in payloads:
+            try:
+                data = base64.b64decode(b64)
+            except Exception:  # noqa: BLE001
+                continue
+            saved += await asyncio.to_thread(self._food_images.save_image, food, data)
+        return saved
 
     async def _resolve_stream_id(self, message: dict, group_id: str, user_id: str) -> str:
         """Hook 载荷里 session_id 可能缺失，按群号/用户号回查聊天流。"""

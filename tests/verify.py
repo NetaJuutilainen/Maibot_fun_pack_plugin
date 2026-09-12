@@ -38,7 +38,12 @@ sys.modules["maibot_sdk.types"] = types_mod
 
 import plugin  # noqa: E402
 
-from essential_passive_eat import FoodImageIndex, PassiveRateLimiter, PassiveResponder  # noqa: E402
+from essential_passive_eat import (  # noqa: E402
+    FoodImageIndex,
+    PassiveRateLimiter,
+    PassiveResponder,
+    sniff_image_ext,
+)
 from essential_render_card import render_report_card  # noqa: E402
 from essential_services import fetch_hitokoto  # noqa: E402
 from essential_storage import FoodStore, GoodMorningStore  # noqa: E402
@@ -147,7 +152,7 @@ def main() -> int:
 
     # ---- 3. 配置模型默认值 ------------------------------------------------
     cfg = plugin.EssentialConfig()
-    check("config_version 默认值存在", cfg.plugin.config_version == "1.1.1",
+    check("config_version 默认值存在", cfg.plugin.config_version == "1.2.0",
           f"实际: {cfg.plugin.config_version!r}")
     check("report.font_size 默认 65", cfg.report.font_size == 65)
     check("good_morning.cooldown_minutes 默认 30", cfg.good_morning.cooldown_minutes == 30)
@@ -180,6 +185,7 @@ def main() -> int:
     known_caps = {
         "send.text", "send.image", "send.hybrid", "maisaka.context.append",
         "chat.get_stream_by_group_id", "chat.get_stream_by_user_id",
+        "message.get_by_id",
     }
     check("capabilities 全部为已知能力名", set(manifest["capabilities"]) <= known_caps,
           f"未知: {set(manifest['capabilities']) - known_caps}")
@@ -271,6 +277,27 @@ def main() -> int:
               got == {"黄焖鸡米饭.jpg", "黄焖鸡米饭_1.png"}, f"抽到 {got}")
         check("图片索引：扩展名大小写不敏感", index.get_random_image("螺蛳粉") is not None)
         check("图片索引：无匹配返回 None", index.get_random_image("不存在的菜") is None)
+
+        # 附图绑定：保存 / 去重 / 多图命名 / 路径净化
+        s1 = index.save_image("锅包肉", b"\xff\xd8\xff\xe0" + b"A" * 200)   # 锅包肉.jpg
+        s2 = index.save_image("锅包肉", b"\xff\xd8\xff\xe0" + b"A" * 200)  # 同内容 → 去重
+        s3 = index.save_image("锅包肉", b"\x89PNG\r\n\x1a\n" + b"B" * 200)  # 异扩展名，不冲突
+        s4 = index.save_image("锅包肉", b"\xff\xd8\xff\xe0" + b"D" * 200)   # 同扩展名第二张 → _1
+        food_files = sorted(p.name for p in img_dir.iterdir() if p.name.startswith("锅包肉"))
+        check("图片绑定：保存/去重/多图命名",
+              (s1, s2, s3, s4) == (1, 0, 1, 1)
+              and food_files == ["锅包肉.jpg", "锅包肉.png", "锅包肉_1.jpg"],
+              f"saved={(s1, s2, s3, s4)} files={food_files}")
+        check("图片绑定：保存后立即可用", index.get_random_image("锅包肉") is not None)
+        check("图片魔数：JPEG/PNG/GIF/WEBP",
+              sniff_image_ext(b"\xff\xd8\xff" + b"\x00" * 50) == ".jpg"
+              and sniff_image_ext(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50) == ".png"
+              and sniff_image_ext(b"GIF89a" + b"\x00" * 50) == ".gif"
+              and sniff_image_ext(b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 20) == ".webp")
+        traversal = index.save_image("../evil", b"\xff\xd8\xff" + b"C" * 200)
+        check("图片绑定：路径穿越被净化",
+              traversal == 1 and (img_dir / "..evil.jpg").exists()
+              and not (img_dir.parent / "evil.jpg").exists())
 
     food_for_passive = FoodStore(ASSETS / "food.json")
     food_for_passive.load()
