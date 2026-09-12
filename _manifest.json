@@ -1,9 +1,9 @@
 {
   "manifest_version": 2,
   "id": "maibot.fun-pack",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "name": "麦爹必备娱乐小插件合集",
-  "description": "麦爹的娱乐功能合集：喜报/悲报图片生成、一言（不计入消息）、答案之书（<问题> 翻看答案）、今天吃什么、群早晚安作息记录、指令菜单；同时注册为麦麦可自主调用的 LLM 工具。",
+  "description": "麦爹的娱乐功能合集：喜报/悲报图片生成、一言（不计入消息）、答案之书（<问题> 翻看答案）、今天吃什么（命令 + 被动触发：概率推荐/复读/防循环限流）、群早晚安作息记录、指令菜单；同时注册为麦麦可自主调用的 LLM 工具。",
   "author": { "name": "NetaJuutilainen", "url": "https://github.com/NetaJuutilainen" },
   "license": "MIT",
   "urls": { "repository": "https://github.com/NetaJuutilainen/Maibot_fun_pack_plugin" },
@@ -13,7 +13,14 @@
     { "type": "python_package", "name": "aiohttp", "version_spec": ">=3.8.0" },
     { "type": "python_package", "name": "Pillow", "version_spec": ">=10.0.0" }
   ],
-  "capabilities": ["send.text", "send.image", "maisaka.context.append"],
+  "capabilities": [
+    "send.text",
+    "send.image",
+    "send.hybrid",
+    "maisaka.context.append",
+    "chat.get_stream_by_group_id",
+    "chat.get_stream_by_user_id"
+  ],
   "i18n": { "default_locale": "zh-CN" },
   "plugin_type": "game"
 }

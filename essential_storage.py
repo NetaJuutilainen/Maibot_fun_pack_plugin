@@ -61,6 +61,9 @@ class FoodStore:
     def choice(self) -> str:
         return random.choice(self.items) if self.items else "随便"
 
+    def choice_or_none(self) -> str | None:
+        return random.choice(self.items) if self.items else None
+
 
 class AnswerBook:
     """答案之书词条库（只读，来自插件 assets/answer_book.json）。"""

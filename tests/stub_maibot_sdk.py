@@ -42,6 +42,25 @@ def Tool(name: str, description: str = "", brief_description: str = "",
     )
 
 
+def HookHandler(hook: str, *, name: str = "", description: str = "", mode=None,
+                order=None, timeout_ms: int = 0, error_policy=None, **meta):
+    return _component_decorator(
+        "hook_handler", name or hook, hook=hook, description=description,
+        mode=mode, order=order, timeout_ms=timeout_ms, error_policy=error_policy, **meta
+    )
+
+
+class HookMode:
+    BLOCKING = "blocking"
+    OBSERVE = "observe"
+
+
+class ErrorPolicy:
+    ABORT = "abort"
+    SKIP = "skip"
+    LOG = "log"
+
+
 class ToolParamType:
     STRING = "string"
     INTEGER = "integer"

@@ -1,7 +1,8 @@
-"""MaiBot 必备娱乐插件（移植自 AstrBot astrbot_plugin_essential）。
+"""麦爹必备娱乐小插件合集（部分功能移植自 AstrBot astrbot_plugin_essential）。
 
 功能：喜报/悲报图片生成、一言（/一言，回复不计入消息）、答案之书（<问题> 翻看答案）、
-今天吃什么、群早晚安作息记录。同时注册 3 个 LLM 工具（deferred 池，由麦麦经 tool_search 按需发现）。
+今天吃什么（命令 + 被动触发：关键词概率推荐/复读，移植自 astrbot_plugin_what_to_eat）、
+群早晚安作息记录。同时注册 3 个 LLM 工具（deferred 池，由麦麦经 tool_search 按需发现）。
 """
 
 from __future__ import annotations
@@ -14,8 +15,14 @@ import sys
 from pathlib import Path
 from typing import Any, ClassVar
 
-from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
-from maibot_sdk.types import CONFIG_RELOAD_SCOPE_SELF, ToolParameterInfo, ToolParamType
+from maibot_sdk import Command, Field, HookHandler, MaiBotPlugin, PluginConfigBase, Tool
+from maibot_sdk.types import (
+    CONFIG_RELOAD_SCOPE_SELF,
+    ErrorPolicy,
+    HookMode,
+    ToolParameterInfo,
+    ToolParamType,
+)
 
 _PLUGIN_DIR = Path(__file__).resolve().parent
 
@@ -44,7 +51,12 @@ GoodMorningStore = _storage.GoodMorningStore
 render_report_card = _render.render_report_card
 report_output_path = _render.report_output_path
 
-SUPPORTED_CONFIG_VERSION = "1.0.1"  # 与 manifest version 保持同步
+_passive_eat = _load_sibling_module("essential_passive_eat")
+PassiveRateLimiter = _passive_eat.PassiveRateLimiter
+PassiveResponder = _passive_eat.PassiveResponder
+FoodImageIndex = _passive_eat.FoodImageIndex
+
+SUPPORTED_CONFIG_VERSION = "1.1.0"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -105,6 +117,34 @@ class HitokotoSection(PluginConfigBase):
     request_timeout_sec: int = Field(default=10, ge=1, description="一言 API 请求超时（秒）")
 
 
+class WhatToEatSection(PluginConfigBase):
+    """今天吃什么（命令 + 被动触发）。"""
+
+    __ui_label__ = "今天吃什么"
+    __ui_icon__ = "restaurant"
+    __ui_order__ = 4
+
+    enabled: bool = Field(
+        default=True, description="启用被动触发：聊天含关键词时按概率推荐食物或复读"
+    )
+    trigger_keywords: list[str] = Field(
+        default_factory=lambda: ["吃什么"], description="被动触发关键词列表（命中任意一个即触发）"
+    )
+    recommend_probability: float = Field(
+        default=0.3, ge=0.0, le=1.0, description="被动触发时推荐食物的概率，其余概率复读"
+    )
+    intercept_message: bool = Field(
+        default=True, description="被动回复后拦截该消息（麦麦不再对其回复）；关闭则麦麦也可以接话"
+    )
+    rate_limit_enabled: bool = Field(default=True, description="启用频率限制（防多 Bot 循环）")
+    rate_limit_max: int = Field(default=3, ge=1, description="时间窗口内最大被动响应次数，超过后强制推荐")
+    rate_limit_window_seconds: int = Field(default=60, ge=1, description="频率限制窗口（秒）")
+    echo_cooldown_enabled: bool = Field(default=True, description="启用复读冷却")
+    echo_cooldown_seconds: int = Field(
+        default=15, ge=0, description="复读后的冷却秒数，冷却期内触发强制推荐"
+    )
+
+
 class EssentialConfig(PluginConfigBase):
     """插件完整配置。"""
 
@@ -112,6 +152,7 @@ class EssentialConfig(PluginConfigBase):
     report: ReportSection = Field(default_factory=ReportSection)
     good_morning: GoodMorningSection = Field(default_factory=GoodMorningSection)
     hitokoto: HitokotoSection = Field(default_factory=HitokotoSection)
+    what_to_eat: WhatToEatSection = Field(default_factory=WhatToEatSection)
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +169,9 @@ class EssentialPlugin(MaiBotPlugin):
         self._food: FoodStore | None = None
         self._good_morning: GoodMorningStore | None = None
         self._answer_book: AnswerBook | None = None
+        self._passive_limiter: PassiveRateLimiter | None = None
+        self._passive_responder: PassiveResponder | None = None
+        self._food_images: FoodImageIndex | None = None
         self._good_morning_cd: dict[str, datetime.datetime] = {}
 
     # -- 生命周期 -----------------------------------------------------------
@@ -137,25 +181,45 @@ class EssentialPlugin(MaiBotPlugin):
         self._food = FoodStore(data_dir / "food.json", _PLUGIN_DIR / "assets" / "food.json")
         self._good_morning = GoodMorningStore(data_dir / "good_morning.json")
         self._answer_book = AnswerBook(_PLUGIN_DIR / "assets" / "answer_book.json")
+        self._food_images = FoodImageIndex(data_dir / "food_images")
         await asyncio.to_thread(self._food.load)
         await asyncio.to_thread(self._good_morning.load)
         await asyncio.to_thread(self._answer_book.load)
+        self._init_what_to_eat_components()
         try:
             self.ctx.paths.runtime_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
         self.ctx.logger.info(
-            "麦爹必备娱乐小插件合集已加载：食物 %d 项，早晚安记录 %d 个会话，答案之书 %d 条",
+            "麦爹必备娱乐小插件合集已加载：食物 %d 项，早晚安记录 %d 个会话，答案之书 %d 条，食物图片 %d 种",
             len(self._food.items),
             len(self._good_morning.data),
             len(self._answer_book.answers),
+            len(self._food_images.foods_with_images()),
         )
+
+    def _init_what_to_eat_components(self) -> None:
+        """按当前配置重建"今天吃什么"共享组件（on_load 与配置热更新共用）。"""
+        cfg = self.config.what_to_eat
+        if cfg.rate_limit_enabled:
+            self._passive_limiter = PassiveRateLimiter(
+                max_responses=cfg.rate_limit_max,
+                window_seconds=cfg.rate_limit_window_seconds,
+                echo_cooldown_enabled=cfg.echo_cooldown_enabled,
+                echo_cooldown_seconds=cfg.echo_cooldown_seconds,
+            )
+        else:
+            self._passive_limiter = None
+        self._passive_responder = PassiveResponder(cfg.recommend_probability)
+        if self._food_images is not None:
+            self._food_images.reload()
 
     async def on_unload(self) -> None:
         self.ctx.logger.info("麦爹必备娱乐小插件合集已卸载")
 
     async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:
         if scope == CONFIG_RELOAD_SCOPE_SELF:
+            self._init_what_to_eat_components()
             self.ctx.logger.info("插件配置已热更新 version=%s", version)
 
     # -- 内部工具 -----------------------------------------------------------
@@ -220,8 +284,9 @@ class EssentialPlugin(MaiBotPlugin):
         "/悲报 <内容> —— 生成悲报图片\n"
         "一言 [文字] —— 随机一条一言（/ 可省；回复不计入消息）\n"
         "<问题> 翻看答案 —— 答案之书，随机翻一页\n"
-        "/今天吃什么 —— 随机推荐今天吃什么\n"
+        "/今天吃什么 —— 立即推荐今天吃什么（有绑定图则图文发送）\n"
         "/今天吃什么 添加|删除 <食物...> —— 维护食物清单\n"
+        "聊天中提到“吃什么” —— 概率推荐美食或复读“是啊，吃什么”（被动触发）\n"
         "早安 / 晚安 —— 记录作息并统计（麦麦可能会接话）\n"
         "/工具列表 —— 显示本菜单\n"
         "本插件另有 3 个 LLM 工具（一言/推荐食物/喜报悲报），麦麦会在合适时机自主调用。"
@@ -463,6 +528,105 @@ class EssentialPlugin(MaiBotPlugin):
         except Exception as e:  # noqa: BLE001
             return {"content": f"喜报/悲报生成失败: {e}"}
         return {"content": f"已生成并发送{'喜报' if happy else '悲报'}图片：{text}"}
+
+    # -- 被动触发（今天吃什么，移植自 astrbot_plugin_what_to_eat） -----------
+
+    def _load_food_image_b64(self, food: str | None) -> str | None:
+        """取食物的随机绑定图并转 base64；无图或读图失败返回 None。"""
+        if self._food_images is None or not food:
+            return None
+        path = self._food_images.get_random_image(food)
+        if path is None:
+            return None
+        try:
+            return base64.b64encode(Path(path).read_bytes()).decode("ascii")
+        except OSError:
+            return None
+
+    async def _resolve_stream_id(self, message: dict, group_id: str, user_id: str) -> str:
+        """Hook 载荷里 session_id 可能缺失，按群号/用户号回查聊天流。"""
+        stream_id = str(message.get("session_id") or "")
+        if stream_id:
+            return stream_id
+        try:
+            if group_id:
+                stream = await self.ctx.chat.get_stream_by_group_id(group_id=group_id)
+            else:
+                stream = await self.ctx.chat.get_stream_by_user_id(user_id=user_id)
+            return str((stream or {}).get("session_id") or "")
+        except Exception as e:  # noqa: BLE001
+            self.ctx.logger.warning("被动触发定位会话失败: %s", e)
+            return ""
+
+    @HookHandler(
+        "chat.receive.after_process",
+        name="passive_what_to_eat",
+        mode=HookMode.BLOCKING,
+        error_policy=ErrorPolicy.SKIP,
+    )
+    async def hook_passive_what_to_eat(self, **kwargs: Any):
+        """被动触发：消息含"吃什么"类关键词时，按概率推荐食物或复读"是啊，吃什么"。"""
+
+        cfg = self.config.what_to_eat
+        if not cfg.enabled or self._passive_responder is None:
+            return None
+
+        message = kwargs.get("message") or {}
+        if message.get("is_notify"):
+            return None
+        text = str(message.get("processed_plain_text") or "").strip()
+        if not text or text.startswith("/"):
+            return None  # 斜杠消息交给命令系统处理
+        if not any(kw and str(kw) in text for kw in (cfg.trigger_keywords or [])):
+            return None
+
+        info = message.get("message_info") or {}
+        group_id = str((info.get("group_info") or {}).get("group_id") or "")
+        user_id = str((info.get("user_info") or {}).get("user_id") or "")
+        chat_key = str(message.get("session_id") or f"{group_id or 'private'}:{user_id}")
+
+        _, force_recommend = (
+            self._passive_limiter.check_and_record(chat_key)
+            if self._passive_limiter
+            else (True, False)
+        )
+        in_cooldown = (
+            self._passive_limiter.is_in_echo_cooldown(chat_key)
+            if self._passive_limiter
+            else False
+        )
+        should_recommend = (
+            force_recommend or in_cooldown or self._passive_responder.should_recommend()
+        )
+
+        stream_id = await self._resolve_stream_id(message, group_id, user_id)
+        if not stream_id:
+            return None  # 定位不到会话，放弃本次触发
+
+        if should_recommend:
+            food = self._food.choice_or_none()
+            response = self._passive_responder.get_food_response(food)
+            image_b64 = await asyncio.to_thread(self._load_food_image_b64, food)
+            if image_b64:
+                sent = await self.ctx.send.hybrid(
+                    [
+                        {"type": "text", "content": response},
+                        {"type": "image", "content": image_b64},
+                    ],
+                    stream_id,
+                )
+                if not sent:
+                    await self.ctx.send.text(response, stream_id)
+            else:
+                await self.ctx.send.text(response, stream_id)
+        else:
+            await self.ctx.send.text(self._passive_responder.get_echo_response(), stream_id)
+            if self._passive_limiter:
+                self._passive_limiter.record_echo(chat_key)
+
+        if cfg.intercept_message:
+            return {"action": "abort", "abort_message": "passive_what_to_eat 已响应"}
+        return None
 
 
 def create_plugin() -> EssentialPlugin:

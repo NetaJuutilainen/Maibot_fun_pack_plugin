@@ -31,13 +31,14 @@ import stub_maibot_sdk as stub  # noqa: E402
 # 注入 stub SDK（必须在导入 plugin 之前）
 sys.modules["maibot_sdk"] = stub
 types_mod = type(sys)("maibot_sdk.types")
-for attr in ("ToolParamType", "ToolParameterInfo", "CONFIG_RELOAD_SCOPE_SELF"):
+for attr in ("ToolParamType", "ToolParameterInfo", "CONFIG_RELOAD_SCOPE_SELF", "HookMode", "ErrorPolicy"):
     setattr(types_mod, attr, getattr(stub, attr))
 types_mod.__path__ = []
 sys.modules["maibot_sdk.types"] = types_mod
 
 import plugin  # noqa: E402
 
+from essential_passive_eat import FoodImageIndex, PassiveRateLimiter, PassiveResponder  # noqa: E402
 from essential_render_card import render_report_card  # noqa: E402
 from essential_services import fetch_hitokoto  # noqa: E402
 from essential_storage import FoodStore, GoodMorningStore  # noqa: E402
@@ -69,7 +70,13 @@ def main() -> int:
 
     commands = {c["name"]: c for c in comps if c["kind"] == "command"}
     tools = {c["name"]: c for c in comps if c["kind"] == "tool"}
+    hooks = [c for c in comps if c["kind"] == "hook_handler"]
     check("命令组件共 7 个", len(commands) == 7, f"实际: {sorted(commands)}")
+    check("工具组件共 3 个", len(tools) == 3, f"实际: {sorted(tools)}")
+    check("被动触发 Hook 存在",
+          len(hooks) == 1 and hooks[0]["name"] == "passive_what_to_eat"
+          and hooks[0]["hook"] == "chat.receive.after_process",
+          f"实际: {[(c['name'], c['hook']) for c in hooks]}")
     check("工具组件共 3 个", len(tools) == 3, f"实际: {sorted(tools)}")
     names = [c["name"] for c in comps]
     check("组件名无重复", len(names) == len(set(names)))
@@ -140,12 +147,16 @@ def main() -> int:
 
     # ---- 3. 配置模型默认值 ------------------------------------------------
     cfg = plugin.EssentialConfig()
-    check("config_version 默认值存在", cfg.plugin.config_version == "1.0.1",
+    check("config_version 默认值存在", cfg.plugin.config_version == "1.1.0",
           f"实际: {cfg.plugin.config_version!r}")
     check("report.font_size 默认 65", cfg.report.font_size == 65)
     check("good_morning.cooldown_minutes 默认 30", cfg.good_morning.cooldown_minutes == 30)
     check("good_morning.forward_to_mai 默认 True", cfg.good_morning.forward_to_mai is True)
     check("hitokoto.request_timeout_sec 默认 10", cfg.hitokoto.request_timeout_sec == 10)
+    check("what_to_eat.enabled 默认 True", cfg.what_to_eat.enabled is True)
+    check("what_to_eat.trigger_keywords 默认 [吃什么]", cfg.what_to_eat.trigger_keywords == ["吃什么"])
+    check("what_to_eat.recommend_probability 默认 0.3", cfg.what_to_eat.recommend_probability == 0.3)
+    check("what_to_eat.intercept_message 默认 True", cfg.what_to_eat.intercept_message is True)
 
     # ---- 4. manifest 校验 -------------------------------------------------
     manifest = json.loads((PLUGIN_DIR / "_manifest.json").read_text(encoding="utf-8"))
@@ -167,7 +178,8 @@ def main() -> int:
     check("host_application 区间合法",
           manifest["host_application"]["min_version"] <= manifest["host_application"]["max_version"])
     known_caps = {
-        "send.text", "send.image", "maisaka.context.append",
+        "send.text", "send.image", "send.hybrid", "maisaka.context.append",
+        "chat.get_stream_by_group_id", "chat.get_stream_by_user_id",
     }
     check("capabilities 全部为已知能力名", set(manifest["capabilities"]) <= known_caps,
           f"未知: {set(manifest['capabilities']) - known_caps}")
@@ -226,6 +238,46 @@ def main() -> int:
     _random.seed(42)
     picks = {book.choice() for _ in range(50)}
     check("答案之书随机抽取正常", len(picks) >= 10, f"50 次抽到 {len(picks)} 种")
+
+    # ---- 被动触发（吃什么）模块 --------------------------------------------
+    limiter = PassiveRateLimiter(max_responses=2, window_seconds=60,
+                                 echo_cooldown_enabled=True, echo_cooldown_seconds=15)
+    forces = [limiter.check_and_record("g1")[1] for _ in range(3)]
+    check("限流器：窗口内超限强制推荐", forces == [False, False, True], f"实际: {forces}")
+    limiter.record_echo("g1")
+    check("限流器：复读后进入冷却", limiter.is_in_echo_cooldown("g1"))
+    limiter_off = PassiveRateLimiter(echo_cooldown_enabled=False)
+    limiter_off.record_echo("g2")
+    check("限流器：冷却开关关闭时不冷却", not limiter_off.is_in_echo_cooldown("g2"))
+
+    responder = PassiveResponder(probability=1.0)
+    check("回复器：概率 1.0 必然推荐", all(responder.should_recommend() for _ in range(20)))
+    responder0 = PassiveResponder(probability=0.0)
+    check("回复器：概率 0.0 必然复读", not any(responder0.should_recommend() for _ in range(20)))
+    check("回复器：推荐文案包含食物名", "黄焖鸡" in responder.get_food_response("黄焖鸡"))
+    check("回复器：无食物走兜底文案",
+          responder.get_food_response(None) == PassiveResponder.FALLBACK_RESPONSE)
+    check("回复器：复读文案固定", responder.get_echo_response() == "是啊，吃什么")
+
+    with tempfile.TemporaryDirectory() as td_img:
+        img_dir = Path(td_img)
+        (img_dir / "黄焖鸡米饭.jpg").write_bytes(b"x")
+        (img_dir / "黄焖鸡米饭_1.png").write_bytes(b"y")
+        (img_dir / "螺蛳粉.GIF").write_bytes(b"z")
+        (img_dir / "说明.txt").write_bytes(b"n")
+        index = FoodImageIndex(img_dir)
+        got = {Path(index.get_random_image("黄焖鸡米饭")).name for _ in range(20)}
+        check("图片索引：按文件名绑定（含序号变体）",
+              got == {"黄焖鸡米饭.jpg", "黄焖鸡米饭_1.png"}, f"抽到 {got}")
+        check("图片索引：扩展名大小写不敏感", index.get_random_image("螺蛳粉") is not None)
+        check("图片索引：无匹配返回 None", index.get_random_image("不存在的菜") is None)
+
+    food_for_passive = FoodStore(ASSETS / "food.json")
+    food_for_passive.load()
+    check("FoodStore.choice_or_none 正常",
+          food_for_passive.choice_or_none() in food_for_passive.items)
+    empty_store = FoodStore(Path(tempfile.gettempdir()) / "definitely_missing_food.json")
+    check("FoodStore.choice_or_none 空清单返回 None", empty_store.choice_or_none() is None)
 
     # ---- 6. 渲染层 --------------------------------------------------------
     with tempfile.TemporaryDirectory() as td:
