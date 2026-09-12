@@ -147,7 +147,7 @@ def main() -> int:
 
     # ---- 3. 配置模型默认值 ------------------------------------------------
     cfg = plugin.EssentialConfig()
-    check("config_version 默认值存在", cfg.plugin.config_version == "1.1.0",
+    check("config_version 默认值存在", cfg.plugin.config_version == "1.1.1",
           f"实际: {cfg.plugin.config_version!r}")
     check("report.font_size 默认 65", cfg.report.font_size == 65)
     check("good_morning.cooldown_minutes 默认 30", cfg.good_morning.cooldown_minutes == 30)

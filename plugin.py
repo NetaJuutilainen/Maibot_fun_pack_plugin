@@ -56,7 +56,7 @@ PassiveRateLimiter = _passive_eat.PassiveRateLimiter
 PassiveResponder = _passive_eat.PassiveResponder
 FoodImageIndex = _passive_eat.FoodImageIndex
 
-SUPPORTED_CONFIG_VERSION = "1.1.0"  # 与 manifest version 保持同步
+SUPPORTED_CONFIG_VERSION = "1.1.1"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -181,6 +181,10 @@ class EssentialPlugin(MaiBotPlugin):
         self._food = FoodStore(data_dir / "food.json", _PLUGIN_DIR / "assets" / "food.json")
         self._good_morning = GoodMorningStore(data_dir / "good_morning.json")
         self._answer_book = AnswerBook(_PLUGIN_DIR / "assets" / "answer_book.json")
+        try:
+            (data_dir / "food_images").mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
         self._food_images = FoodImageIndex(data_dir / "food_images")
         await asyncio.to_thread(self._food.load)
         await asyncio.to_thread(self._good_morning.load)
@@ -608,15 +612,20 @@ class EssentialPlugin(MaiBotPlugin):
             response = self._passive_responder.get_food_response(food)
             image_b64 = await asyncio.to_thread(self._load_food_image_b64, food)
             if image_b64:
-                sent = await self.ctx.send.hybrid(
-                    [
-                        {"type": "text", "content": response},
-                        {"type": "image", "content": image_b64},
-                    ],
-                    stream_id,
-                )
+                sent = False
+                try:
+                    sent = await self.ctx.send.hybrid(
+                        [
+                            {"type": "text", "content": response},
+                            {"type": "image", "content": image_b64},
+                        ],
+                        stream_id,
+                    )
+                except Exception as e:  # noqa: BLE001 - 能力未授权等异常时降级为分开发送
+                    self.ctx.logger.warning("send.hybrid 失败，降级为文本+图片分开发送: %s", e)
                 if not sent:
                     await self.ctx.send.text(response, stream_id)
+                    await self.ctx.send.image(image_b64, stream_id)
             else:
                 await self.ctx.send.text(response, stream_id)
         else:

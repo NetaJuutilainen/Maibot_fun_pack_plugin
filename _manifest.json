@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "maibot.fun-pack",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "name": "麦爹必备娱乐小插件合集",
   "description": "麦爹的娱乐功能合集：喜报/悲报图片生成、一言（不计入消息）、答案之书（<问题> 翻看答案）、今天吃什么（命令 + 被动触发：概率推荐/复读/防循环限流）、群早晚安作息记录、指令菜单；同时注册为麦麦可自主调用的 LLM 工具。",
   "author": { "name": "NetaJuutilainen", "url": "https://github.com/NetaJuutilainen" },
