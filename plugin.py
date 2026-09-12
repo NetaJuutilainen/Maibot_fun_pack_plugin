@@ -59,7 +59,7 @@ PassiveResponder = _passive_eat.PassiveResponder
 FoodImageIndex = _passive_eat.FoodImageIndex
 sniff_image_ext = _passive_eat.sniff_image_ext
 
-SUPPORTED_CONFIG_VERSION = "1.3.0"  # 与 manifest version 保持同步
+SUPPORTED_CONFIG_VERSION = "1.3.1"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -299,13 +299,13 @@ class EssentialPlugin(MaiBotPlugin):
         "本插件另有 3 个 LLM 工具（一言/推荐食物/喜报悲报），麦麦会在合适时机自主调用。"
     )
 
-    @Command("tool_list", description="查看本插件全部指令", pattern=r"(?<!\S)/工具列表\s*$")
+    @Command("tool_list", description="查看本插件全部指令", pattern=r"(?<!\S)/工具列表(?:\s*\[[^\]]*\])*\s*$")
     async def cmd_tool_list(self, **kwargs: Any):
         stream_id = self._stream_id(kwargs)
         await self.ctx.send.text(self.MENU_TEXT, stream_id)
         return True, "已发送指令列表", True
 
-    @Command("happy_report", description="喜报图片生成", pattern=r"(?<!\S)/喜报\s+(?P<text>.+)\s*$")
+    @Command("happy_report", description="喜报图片生成", pattern=r"(?<!\S)/喜报\s+(?P<text>[\s\S]+?)\s*(?:\[[^\]]*\]\s*)*$")
     async def cmd_happy_report(self, **kwargs: Any):
         text = strip_bracket_placeholders(
             str((kwargs.get("matched_groups") or {}).get("text") or "")
@@ -317,7 +317,7 @@ class EssentialPlugin(MaiBotPlugin):
         await self._send_report_card(happy=True, text=text, stream_id=stream_id)
         return True, "喜报已生成", True
 
-    @Command("sad_report", description="悲报图片生成", pattern=r"(?<!\S)/悲报\s+(?P<text>.+)\s*$")
+    @Command("sad_report", description="悲报图片生成", pattern=r"(?<!\S)/悲报\s+(?P<text>[\s\S]+?)\s*(?:\[[^\]]*\]\s*)*$")
     async def cmd_sad_report(self, **kwargs: Any):
         text = strip_bracket_placeholders(
             str((kwargs.get("matched_groups") or {}).get("text") or "")
@@ -361,7 +361,7 @@ class EssentialPlugin(MaiBotPlugin):
                 self.ctx.logger.warning("答案之书回复发送失败（含降级路径），请查主进程日志")
         return True, "答案之书已翻页", True
 
-    @Command("hitokoto", description="来一条一言", pattern=r"(?<!\S)/?一言(?:\s+(?P<extra>.+))?\s*$")
+    @Command("hitokoto", description="来一条一言", pattern=r"(?<!\S)/?一言(?:\s+(?P<extra>[\s\S]+?))?\s*(?:\[[^\]]*\]\s*)*$")
     async def cmd_hitokoto(self, **kwargs: Any):
         """一言：随取随看，命令回复不入库、不同步进麦麦上下文（不计入消息）。"""
         stream_id = self._stream_id(kwargs)
@@ -383,7 +383,7 @@ class EssentialPlugin(MaiBotPlugin):
     @Command(
         "what_to_eat",
         description="今天吃什么",
-        pattern=r"(?<!\S)/今天吃什么(?:\s+(?P<action>添加|删除)(?:\s+(?P<items>.+))?)?\s*$",
+        pattern=r"(?<!\S)/今天吃什么(?:\s+(?P<action>添加|删除)(?:\s+(?P<items>[\s\S]+?))?)?(?:\s*\[[^\]]*\])*\s*$",
     )
     async def cmd_what_to_eat(self, **kwargs: Any):
         groups = kwargs.get("matched_groups") or {}

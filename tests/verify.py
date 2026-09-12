@@ -133,6 +133,19 @@ def main() -> int:
         ("good_morning", "晚安故事", False, None),
         ("good_morning", "我来说早安", False, None),
         ("good_morning", "早安晚安都行", False, None),
+        # 带图消息：占位符在换行之后，命令必须容忍该尾巴（占位符不进参数）
+        ("what_to_eat", "/今天吃什么 添加 锅包肉\n [图片：这是一张测试图片]", True,
+         {"action": "添加", "items": "锅包肉"}),
+        ("what_to_eat", "/今天吃什么 添加 今天不许吃改为请血之意志吃\n [图片：这张图片展示了QQ资料页面]",
+         True, {"action": "添加", "items": "今天不许吃改为请血之意志吃"}),
+        ("what_to_eat", "/今天吃什么\n [图片：一张图片]", True,
+         {"action": None, "items": None}),
+        ("happy_report", "/喜报 张三考上了大学\n [图片：一张图片]", True,
+         {"text": "张三考上了大学"}),
+        ("hitokoto", "/一言 今天能否起飞\n [图片：一张图片]", True,
+         {"extra": "今天能否起飞"}),
+        ("tool_list", "/工具列表\n [图片：一张图片]", True, None),
+        ("tool_list", "/工具列表\n[图片：一张图片]", True, None),
     ]
     for name, text, expected_hit, expected_groups in cases:
         pattern = commands[name]["pattern"]
@@ -152,7 +165,7 @@ def main() -> int:
 
     # ---- 3. 配置模型默认值 ------------------------------------------------
     cfg = plugin.EssentialConfig()
-    check("config_version 默认值存在", cfg.plugin.config_version == "1.3.0",
+    check("config_version 默认值存在", cfg.plugin.config_version == "1.3.1",
           f"实际: {cfg.plugin.config_version!r}")
     check("report.font_size 默认 65", cfg.report.font_size == 65)
     check("good_morning.cooldown_minutes 默认 30", cfg.good_morning.cooldown_minutes == 30)
