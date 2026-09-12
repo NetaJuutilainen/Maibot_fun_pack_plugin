@@ -46,7 +46,7 @@ from essential_passive_eat import (  # noqa: E402
 )
 from essential_render_card import render_report_card  # noqa: E402
 from essential_services import fetch_hitokoto  # noqa: E402
-from essential_storage import FoodStore, GoodMorningStore  # noqa: E402
+from essential_storage import FoodStore, GoodMorningStore, strip_bracket_placeholders  # noqa: E402
 
 ASSETS = PLUGIN_DIR / "assets"
 PASS, FAIL = 0, 0
@@ -152,7 +152,7 @@ def main() -> int:
 
     # ---- 3. 配置模型默认值 ------------------------------------------------
     cfg = plugin.EssentialConfig()
-    check("config_version 默认值存在", cfg.plugin.config_version == "1.2.0",
+    check("config_version 默认值存在", cfg.plugin.config_version == "1.2.1",
           f"实际: {cfg.plugin.config_version!r}")
     check("report.font_size 默认 65", cfg.report.font_size == 65)
     check("good_morning.cooldown_minutes 默认 30", cfg.good_morning.cooldown_minutes == 30)
@@ -305,6 +305,14 @@ def main() -> int:
           food_for_passive.choice_or_none() in food_for_passive.items)
     empty_store = FoodStore(Path(tempfile.gettempdir()) / "definitely_missing_food.json")
     check("FoodStore.choice_or_none 空清单返回 None", empty_store.choice_or_none() is None)
+
+    # ---- 占位符清理（带图消息的 [图片：AI 描述] 尾巴） -----------------------
+    dirty = "烤鸭 [图片：这张图片展示了一桌丰盛的北京烤鸭。烤鸭被切成薄片，色泽金黄诱人。]"
+    cleaned = strip_bracket_placeholders(dirty).split()
+    check("占位符清理：图片描述被剥离", cleaned == ["烤鸭"], f"实际: {cleaned}")
+    leftovers = [n for n in strip_bracket_placeholders("烤鸭 [没写完的").split()
+                 if "[" not in n and "]" not in n]
+    check("占位符清理：残留括号会被名字过滤兜底", leftovers == ["烤鸭"], f"实际: {leftovers}")
 
     # ---- 6. 渲染层 --------------------------------------------------------
     with tempfile.TemporaryDirectory() as td:

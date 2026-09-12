@@ -8,10 +8,19 @@ from __future__ import annotations
 import datetime
 import json
 import random
+import re
 import shutil
 from pathlib import Path
 
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
+
+# MaiBot 处理文本中的图片/表情占位符，如 [图片：<AI 对图片的描述>]、[表情]
+_PLACEHOLDER_RE = re.compile(r"\[[^\]]*\]")
+
+
+def strip_bracket_placeholders(text: str) -> str:
+    """去掉文本中的方括号占位符（图片描述、表情等），避免被当成命令参数。"""
+    return _PLACEHOLDER_RE.sub(" ", text or "")
 
 
 class FoodStore:

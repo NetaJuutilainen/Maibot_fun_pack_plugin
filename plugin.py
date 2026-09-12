@@ -48,6 +48,7 @@ fetch_hitokoto = _services.fetch_hitokoto
 AnswerBook = _storage.AnswerBook
 FoodStore = _storage.FoodStore
 GoodMorningStore = _storage.GoodMorningStore
+strip_bracket_placeholders = _storage.strip_bracket_placeholders
 render_report_card = _render.render_report_card
 report_output_path = _render.report_output_path
 
@@ -57,7 +58,7 @@ PassiveResponder = _passive_eat.PassiveResponder
 FoodImageIndex = _passive_eat.FoodImageIndex
 sniff_image_ext = _passive_eat.sniff_image_ext
 
-SUPPORTED_CONFIG_VERSION = "1.2.0"  # 与 manifest version 保持同步
+SUPPORTED_CONFIG_VERSION = "1.2.1"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -305,7 +306,9 @@ class EssentialPlugin(MaiBotPlugin):
 
     @Command("happy_report", description="喜报图片生成", pattern=r"(?<!\S)/喜报\s+(?P<text>.+)\s*$")
     async def cmd_happy_report(self, **kwargs: Any):
-        text = str((kwargs.get("matched_groups") or {}).get("text") or "").strip()
+        text = strip_bracket_placeholders(
+            str((kwargs.get("matched_groups") or {}).get("text") or "")
+        ).strip()
         stream_id = self._stream_id(kwargs)
         if not text:
             await self.ctx.send.text("用法：/喜报 <内容>", stream_id)
@@ -315,7 +318,9 @@ class EssentialPlugin(MaiBotPlugin):
 
     @Command("sad_report", description="悲报图片生成", pattern=r"(?<!\S)/悲报\s+(?P<text>.+)\s*$")
     async def cmd_sad_report(self, **kwargs: Any):
-        text = str((kwargs.get("matched_groups") or {}).get("text") or "").strip()
+        text = strip_bracket_placeholders(
+            str((kwargs.get("matched_groups") or {}).get("text") or "")
+        ).strip()
         stream_id = self._stream_id(kwargs)
         if not text:
             await self.ctx.send.text("用法：/悲报 <内容>", stream_id)
@@ -385,8 +390,11 @@ class EssentialPlugin(MaiBotPlugin):
         items = str(groups.get("items") or "").strip()
         stream_id = self._stream_id(kwargs)
 
-        if action:
-            names = items.split()
+            if action:
+                # 带图消息的文本尾部会带 [图片：AI 描述] 占位符，先剥掉再解析
+                items = strip_bracket_placeholders(items)
+                names = [n for n in items.split() if "[" not in n and "]" not in n]
+                self.ctx.logger.info("今天吃什么：items=%r names=%r", items, names)
             if not names:
                 await self.ctx.send.text(f"格式：/今天吃什么 {action} [食物1] [食物2] ...", stream_id)
                 return False, "缺少食物名", True
