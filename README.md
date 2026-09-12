@@ -79,7 +79,7 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 
 ## 能力声明（capabilities）
 
-`send.text`、`send.image`、`send.hybrid`、`maisaka.context.append`、`chat.get_stream_by_group_id`、`chat.get_stream_by_user_id`、`message.get_by_id`。修改 manifest 中的能力声明后必须完整重启 MaiBot。
+`send.text`、`send.image`、`send.hybrid`、`maisaka.context.append`、`chat.get_stream_by_group_id`、`chat.get_stream_by_user_id`。修改 manifest 中的能力声明后必须完整重启 MaiBot。
 
 ## 持续更新
 
