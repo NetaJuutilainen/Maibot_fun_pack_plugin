@@ -395,9 +395,10 @@ class EssentialPlugin(MaiBotPlugin):
                 added = self._food.add(names)
                 await asyncio.to_thread(self._food.save)
                 segs = (kwargs.get("message") or {}).get("raw_message") or []
-                has_attached = any(
-                    isinstance(s, dict) and s.get("type") in ("image", "emoji") for s in segs
-                )
+                seg_types = [s.get("type") for s in segs if isinstance(s, dict)]
+                has_attached = any(t in ("image", "emoji") for t in seg_types)
+                if segs:
+                    self.ctx.logger.info("今天吃什么：命令消息段类型 %s", seg_types)
                 bound = 0
                 if has_attached and len(names) == 1:
                     message_id = str((kwargs.get("message") or {}).get("message_id") or "")
@@ -583,15 +584,22 @@ class EssentialPlugin(MaiBotPlugin):
             self.ctx.logger.warning("获取消息详情失败，无法绑定附带图片: %s", e)
             return 0
         if not isinstance(detail, dict):
+            self.ctx.logger.warning("get_by_id 返回类型异常: %s", type(detail).__name__)
             return 0
-        payloads = [
-            seg.get("binary_data_base64")
-            for seg in (detail.get("raw_message") or [])
-            if isinstance(seg, dict)
-            and seg.get("type") in ("image", "emoji")
-            and isinstance(seg.get("binary_data_base64"), str)
-            and seg.get("binary_data_base64")
-        ]
+        raw = detail.get("raw_message") or []
+        if not raw:
+            self.ctx.logger.warning(
+                "get_by_id 回查无 raw_message（返回键: %s）", sorted(detail.keys()))
+        payloads = []
+        for seg in raw:
+            if not isinstance(seg, dict) or seg.get("type") not in ("image", "emoji"):
+                continue
+            b64 = seg.get("binary_data_base64")
+            if isinstance(b64, str) and b64:
+                payloads.append(b64)
+            else:
+                self.ctx.logger.warning(
+                    "get_by_id 图片段缺 binary_data_base64（字段: %s）", sorted(seg.keys()))
         saved = 0
         for b64 in payloads:
             try:
