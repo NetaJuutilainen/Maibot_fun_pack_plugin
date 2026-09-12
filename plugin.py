@@ -58,7 +58,7 @@ PassiveResponder = _passive_eat.PassiveResponder
 FoodImageIndex = _passive_eat.FoodImageIndex
 sniff_image_ext = _passive_eat.sniff_image_ext
 
-SUPPORTED_CONFIG_VERSION = "1.2.1"  # 与 manifest version 保持同步
+SUPPORTED_CONFIG_VERSION = "1.2.2"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -582,17 +582,27 @@ class EssentialPlugin(MaiBotPlugin):
     async def _save_attached_food_images(self, food: str, message_id: str) -> int:
         """把命令消息附带的图片保存为该食物的绑定图，返回保存张数。
 
-        命令载荷不含二进制数据，需按 message_id 回查含二进制的消息详情。
+        命令载荷不含二进制数据，需按 message_id 回查含二进制的消息详情（图片按
+        hash 从宿主图片库回填）。消息落库与命令执行存在时差，查询为空时短重试。
         """
         if not message_id:
             return 0
-        try:
-            detail = await self.ctx.message.get_by_id(message_id, include_binary_data=True)
-        except Exception as e:  # noqa: BLE001
-            self.ctx.logger.warning("获取消息详情失败，无法绑定附带图片: %s", e)
-            return 0
+        detail = None
+        delays = (0.0, 0.7, 1.6, 3.0)
+        for i, delay in enumerate(delays):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                detail = await self.ctx.message.get_by_id(message_id, include_binary_data=True)
+            except Exception as e:  # noqa: BLE001
+                self.ctx.logger.warning("获取消息详情失败，无法绑定附带图片: %s", e)
+                return 0
+            if isinstance(detail, dict) and detail.get("raw_message"):
+                break
+            if i < len(delays) - 1:
+                self.ctx.logger.info("消息 %s 尚未可查（第 %d 次），稍后重试", message_id, i + 1)
         if not isinstance(detail, dict):
-            self.ctx.logger.warning("get_by_id 返回类型异常: %s", type(detail).__name__)
+            self.ctx.logger.warning("重试后仍未查到消息 %s，放弃绑定附带图片", message_id)
             return 0
         raw = detail.get("raw_message") or []
         if not raw:
