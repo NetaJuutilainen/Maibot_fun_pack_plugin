@@ -59,7 +59,7 @@ PassiveResponder = _passive_eat.PassiveResponder
 FoodImageIndex = _passive_eat.FoodImageIndex
 sniff_image_ext = _passive_eat.sniff_image_ext
 
-SUPPORTED_CONFIG_VERSION = "1.3.3"  # 与 manifest version 保持同步
+SUPPORTED_CONFIG_VERSION = "1.3.2"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
