@@ -1,4 +1,4 @@
-"""麦爹必备娱乐小插件合集（部分功能移植自 AstrBot astrbot_plugin_essential）。
+"""麦麦小工具合集（部分功能移植自 AstrBot astrbot_plugin_essential）。
 
 功能：喜报/悲报图片生成、一言（/一言，回复不计入消息）、答案之书（<问题> 翻看答案）、
 今天吃什么（命令 + 被动触发：关键词概率推荐/复读，移植自 astrbot_plugin_what_to_eat）、
@@ -59,7 +59,7 @@ PassiveResponder = _passive_eat.PassiveResponder
 FoodImageIndex = _passive_eat.FoodImageIndex
 sniff_image_ext = _passive_eat.sniff_image_ext
 
-SUPPORTED_CONFIG_VERSION = "1.3.2"  # 与 manifest version 保持同步
+SUPPORTED_CONFIG_VERSION = "1.3.3"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -198,7 +198,7 @@ class EssentialPlugin(MaiBotPlugin):
         except OSError:
             pass
         self.ctx.logger.info(
-            "麦爹必备娱乐小插件合集已加载：食物 %d 项，早晚安记录 %d 个会话，答案之书 %d 条，食物图片 %d 种",
+            "麦麦小工具合集已加载：食物 %d 项，早晚安记录 %d 个会话，答案之书 %d 条，食物图片 %d 种",
             len(self._food.items),
             len(self._good_morning.data),
             len(self._answer_book.answers),
@@ -222,7 +222,7 @@ class EssentialPlugin(MaiBotPlugin):
             self._food_images.reload()
 
     async def on_unload(self) -> None:
-        self.ctx.logger.info("麦爹必备娱乐小插件合集已卸载")
+        self.ctx.logger.info("麦麦小工具合集已卸载")
 
     async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:
         if scope == CONFIG_RELOAD_SCOPE_SELF:
@@ -286,7 +286,7 @@ class EssentialPlugin(MaiBotPlugin):
     # -- 命令组件 -----------------------------------------------------------
 
     MENU_TEXT = (
-        "【麦爹必备娱乐小插件合集 · 指令列表】\n"
+        "【麦麦小工具合集 · 指令列表】\n"
         "/喜报 <内容> —— 生成喜报图片\n"
         "/悲报 <内容> —— 生成悲报图片\n"
         "一言 [文字] —— 随机一条一言（/ 可省；回复不计入消息）\n"

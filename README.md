@@ -1,4 +1,4 @@
-# 麦爹必备娱乐小插件合集
+# 麦麦小工具合集
 
 MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插件
 [astrbot_plugin_essential](https://github.com/Soulter/astrbot_plugin_essential)（Soulter / FateTrial）**，
@@ -58,7 +58,7 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
    OneKey 部署为 `<数据>\modules\MaiBot\plugins\`）。
 2. 在 WebUI（http://127.0.0.1:8001）插件管理中加载插件（更新代码后点重载即可，无需重启）。
    依赖 `aiohttp`、`Pillow` 由插件系统按 manifest 声明自动安装。
-3. 日志出现"麦爹必备娱乐小插件合集已加载"即可测试。
+3. 日志出现"麦麦小工具合集已加载"即可测试。
 
 ## 配置
 
