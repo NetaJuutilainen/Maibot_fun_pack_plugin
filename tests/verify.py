@@ -1,13 +1,14 @@
 """离线验证脚本：不启动 MaiBot，对本插件做结构自检。
 
 检查项：
- 1. stub SDK 下 plugin.py 可导入，组件声明完整（5 命令 + 3 工具）且名称唯一；
+ 1. stub SDK 下 plugin.py 可导入，组件声明完整（8 命令 + 4 工具）且名称唯一；
  2. 命令正则按 MaiBot re.search 语义的行为（命中/不命中样例）；
  3. 配置模型默认值（含 1.2.3 硬性要求的 plugin.config_version）；
  4. manifest 结构校验（字段、ID/版本正则、能力名、依赖）；
  5. 存储层：food 增删持久化、早晚安记录与统计逻辑；
- 6. 渲染层：真实渲染喜报/悲报各一张并用 PIL 复检；
- 7. 一言接口连通性（尽力而为，失败记 SKIP 不算失败）。
+ 6. 渲染层：真实渲染喜报/悲报/锦旗并用 PIL 复检；
+ 7. 锦旗领域逻辑：分段、分列、日期写法、默认值补全与越界报错；
+ 8. 一言接口连通性（尽力而为，失败记 SKIP 不算失败）。
 
 用法：python tests/verify.py
 """
@@ -15,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import re
 import sys
@@ -38,6 +40,13 @@ sys.modules["maibot_sdk.types"] = types_mod
 
 import plugin  # noqa: E402
 
+from essential_jinqi import (  # noqa: E402
+    JinqiError,
+    build_spec,
+    chinese_date,
+    format_date,
+    split_thanks,
+)
 from essential_passive_eat import (  # noqa: E402
     FoodImageIndex,
     PassiveRateLimiter,
@@ -45,6 +54,7 @@ from essential_passive_eat import (  # noqa: E402
     sniff_image_ext,
 )
 from essential_render_card import render_report_card  # noqa: E402
+from essential_render_jinqi import FontSet, render_jinqi  # noqa: E402
 from essential_services import fetch_hitokoto  # noqa: E402
 from essential_storage import FoodStore, GoodMorningStore, strip_bracket_placeholders  # noqa: E402
 
@@ -76,13 +86,12 @@ def main() -> int:
     commands = {c["name"]: c for c in comps if c["kind"] == "command"}
     tools = {c["name"]: c for c in comps if c["kind"] == "tool"}
     hooks = [c for c in comps if c["kind"] == "hook_handler"]
-    check("命令组件共 7 个", len(commands) == 7, f"实际: {sorted(commands)}")
-    check("工具组件共 3 个", len(tools) == 3, f"实际: {sorted(tools)}")
+    check("命令组件共 8 个", len(commands) == 8, f"实际: {sorted(commands)}")
+    check("工具组件共 4 个", len(tools) == 4, f"实际: {sorted(tools)}")
     check("被动触发 Hook 存在",
           len(hooks) == 1 and hooks[0]["name"] == "passive_what_to_eat"
           and hooks[0]["hook"] == "chat.receive.after_process",
           f"实际: {[(c['name'], c['hook']) for c in hooks]}")
-    check("工具组件共 3 个", len(tools) == 3, f"实际: {sorted(tools)}")
     names = [c["name"] for c in comps]
     check("组件名无重复", len(names) == len(set(names)))
 
@@ -104,6 +113,15 @@ def main() -> int:
         ("sad_report", "/悲报 项目又延期了", True, {"text": "项目又延期了"}),
         ("sad_report", "悲报 项目又延期了", False, None),
         ("sad_report", "这个悲报真好看", False, None),
+        ("jinqi", "/锦旗 助人为乐 情暖人心", True, {"text": "助人为乐 情暖人心"}),
+        ("jinqi", "/锦旗 助人为乐 情暖人心 | 赠：麦麦 | 全体群友", True,
+         {"text": "助人为乐 情暖人心 | 赠：麦麦 | 全体群友"}),
+        ("jinqi", "看这个 /锦旗 赛博菩萨", True, {"text": "赛博菩萨"}),
+        ("jinqi", "/锦旗", True, {"text": None}),
+        ("jinqi", "锦旗 助人为乐", False, None),
+        ("jinqi", "聊聊锦旗怎么做", False, None),
+        ("jinqi", "/锦旗吧", False, None),
+        ("jinqi", "/锦旗 助人为乐\n [图片：一张图片]", True, {"text": "助人为乐"}),
         ("answer_book", "今天能否起飞 翻看答案", True, {"question": "今天能否起飞"}),
         ("answer_book", "明天会下雨吗 翻看答案", True, {"question": "明天会下雨吗"}),
         ("answer_book", "翻看答案", True, {"question": None}),
@@ -165,7 +183,7 @@ def main() -> int:
 
     # ---- 3. 配置模型默认值 ------------------------------------------------
     cfg = plugin.EssentialConfig()
-    check("config_version 默认值存在", cfg.plugin.config_version == "1.3.2",
+    check("config_version 默认值存在", cfg.plugin.config_version == "1.4.0",
           f"实际: {cfg.plugin.config_version!r}")
     check("report.font_size 默认 65", cfg.report.font_size == 65)
     check("good_morning.cooldown_minutes 默认 30", cfg.good_morning.cooldown_minutes == 30)
@@ -175,6 +193,11 @@ def main() -> int:
     check("what_to_eat.trigger_keywords 默认 [吃什么]", cfg.what_to_eat.trigger_keywords == ["吃什么"])
     check("what_to_eat.recommend_probability 默认 0.3", cfg.what_to_eat.recommend_probability == 0.3)
     check("what_to_eat.intercept_message 默认 True", cfg.what_to_eat.intercept_message is True)
+    check("jinqi.enabled 默认 True", cfg.jinqi.enabled is True)
+    check("jinqi.big_font_size 默认 110", cfg.jinqi.big_font_size == 110)
+    check("jinqi.small_font_size 默认 42", cfg.jinqi.small_font_size == 42)
+    check("jinqi.date_style 默认 chinese", cfg.jinqi.date_style == "chinese")
+    check("jinqi.default_signer 默认空", cfg.jinqi.default_signer == "")
 
     # ---- 4. manifest 校验 -------------------------------------------------
     manifest = json.loads((PLUGIN_DIR / "_manifest.json").read_text(encoding="utf-8"))
@@ -193,6 +216,9 @@ def main() -> int:
           bool(re.fullmatch(r"[A-Za-z0-9_]+(?:[.-][A-Za-z0-9_]+)+", manifest["id"])),
           manifest["id"])
     check("version 三段式", bool(re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"])))
+    check("manifest.version 与 SUPPORTED_CONFIG_VERSION 同步",
+          manifest["version"] == plugin.SUPPORTED_CONFIG_VERSION,
+          f"{manifest['version']} vs {plugin.SUPPORTED_CONFIG_VERSION}")
     check("host_application 区间合法",
           manifest["host_application"]["min_version"] <= manifest["host_application"]["max_version"])
     known_caps = {
@@ -326,6 +352,64 @@ def main() -> int:
                  if "[" not in n and "]" not in n]
     check("占位符清理：残留括号会被名字过滤兜底", leftovers == ["烤鸭"], f"实际: {leftovers}")
 
+    # ---- 锦旗领域逻辑 ------------------------------------------------------
+    check("分列：空白恰好两段 → 两列", split_thanks("助人为乐 情暖人心") == ("助人为乐", "情暖人心"))
+    check("分列：显式分隔符 → 两列",
+          split_thanks("妙语连珠、群友之光") == ("妙语连珠", "群友之光")
+          and split_thanks("妙语连珠/群友之光") == ("妙语连珠", "群友之光"))
+    check("分列：四字保持单列", split_thanks("赛博菩萨") == ("赛博菩萨",))
+    check("分列：八字节整句对半折行", split_thanks("助人为乐情暖人心") == ("助人为乐", "情暖人心"))
+    check("分列：三段不被误切（去掉空白后对半折）",
+          split_thanks("代码零 Bug 上线不炸服") == ("代码零Bug", "上线不炸服"))
+    check("分列：六字以内不折", split_thanks("麦麦永远滴神") == ("麦麦永远滴神",))
+    for bad, why in (("", "空"), ("助人为乐情暖人心恭喜发财啦再添一句", "超 16 字"), ("助人为乐情暖人心呀/好", "单列超 8 字")):
+        try:
+            split_thanks(bad)
+            check(f"分列：{why}应报错", False, f"未报错: {bad!r}")
+        except JinqiError:
+            check(f"分列：{why}应报错", True)
+
+    check("日期：中文写法", chinese_date(datetime.date(2026, 9, 27)) == "二〇二六年九月廿七",
+          chinese_date(datetime.date(2026, 9, 27)))
+    check("日期：中文写法边界（1/10/11/20/21/30/31）",
+          [chinese_date(datetime.date(2026, 1, d)) for d in (1, 10, 11, 20, 21, 30, 31)]
+          == ["二〇二六年一月初一", "二〇二六年一月初十", "二〇二六年一月十一",
+              "二〇二六年一月二十", "二〇二六年一月廿一", "二〇二六年一月三十",
+              "二〇二六年一月卅一"],
+          str([chinese_date(datetime.date(2026, 1, d)) for d in (1, 10, 11, 20, 21, 30, 31)]))
+    check("日期：十二月", chinese_date(datetime.date(2026, 12, 31)) == "二〇二六年十二月卅一")
+    check("日期：numeric / none 两种写法",
+          format_date(datetime.date(2026, 9, 27), "numeric") == "2026-09-27"
+          and format_date(datetime.date(2026, 9, 27), "none") == "")
+
+    today = datetime.date(2026, 9, 27)
+    spec = build_spec("助人为乐 情暖人心 | 麦麦 | 全体群友", fallback_signer="路人甲", today=today)
+    check("组装：三段完整解析",
+          (list(spec.thanks_columns), spec.recipient, spec.signer, spec.date_text)
+          == (["助人为乐", "情暖人心"], "赠：麦麦", "全体群友", "二〇二六年九月廿七"),
+          str(spec))
+    check("组装：赠予对象自动补「赠：」前缀且不重复补",
+          build_spec("好 | 赠：麦麦", today=today).recipient == "赠：麦麦"
+          and build_spec("好 | 敬赠麦麦", today=today).recipient == "敬赠麦麦")
+    check("组装：落款缺省时用昵称 +「敬赠」",
+          build_spec("好", fallback_signer="小明", today=today).signer == "小明 敬赠")
+    check("组装：无昵称时落款留空",
+          build_spec("好", today=today).signer == "")
+    check("组装：显式落款优先于昵称",
+          build_spec("好 | 麦麦 | 全体群友", fallback_signer="小明", today=today).signer == "全体群友")
+    check("组装：赠予对象缺省时留空",
+          build_spec("好 | | 全体群友", today=today).recipient == "")
+    check("组装：date_style=none 不渲染日期",
+          build_spec("好", date_style="none", today=today).date_text == "")
+    check("组装：全角竖线也能分段",
+          build_spec("好｜麦麦", today=today).recipient == "赠：麦麦")
+    for bad, why in (("", "无感谢语"), ("好 | 这个赠予对象实在是太长了根本放不下", "赠予对象超长")):
+        try:
+            build_spec(bad, today=today)
+            check(f"组装：{why}应报错", False, f"未报错: {bad!r}")
+        except JinqiError:
+            check(f"组装：{why}应报错", True)
+
     # ---- 6. 渲染层 --------------------------------------------------------
     with tempfile.TemporaryDirectory() as td:
         out = Path(td) / "card.jpg"
@@ -342,6 +426,43 @@ def main() -> int:
         render_report_card(ASSETS / "uncongrats.jpg", ASSETS / "NotoSansSC.ttf",
                            "悲报，今天什么都没发生", 65, out2, (0, 0, 0), (255, 255, 255))
         check("悲报渲染输出", out2.exists() and out2.stat().st_size > 10_000)
+
+        # 锦旗：完整版 / 极简版 / 超长文案自动缩号
+        from PIL import Image as _Image
+        from essential_render_jinqi import BG_SIZE  # noqa: PLC0415
+
+        with _Image.open(ASSETS / "jinqi_bg.png") as bg_im:
+            check("锦旗底图尺寸与渲染常量一致", bg_im.size == BG_SIZE,
+                  f"底图 {bg_im.size} vs BG_SIZE {BG_SIZE}")
+        check("锦旗底图留白区是白的（说明素材底色正常）",
+              _Image.open(ASSETS / "jinqi_bg.png").convert("RGB").getpixel((4, 4))[0] > 230)
+
+        jq_cases = [
+            ("完整版", build_spec("助人为乐 情暖人心 | 麦麦 | 全体群友", today=today)),
+            ("极简版", build_spec("赛博菩萨", today=today)),
+            ("两列长句", build_spec("代码零Bug 上线不炸服", fallback_signer="运维组", today=today)),
+            ("拉丁混排", build_spec("代码零BUG 上线不炸服 | 赠：麦麦 | 测试", today=today)),
+            ("数字日期", build_spec("好", date_style="numeric", today=today)),
+            ("十六字满格", build_spec("恭喜发财红包拿来 身体健康万事如意", today=today)),
+            ("最长组合", build_spec(
+                "妙语连珠 群友之光 | 赠：麦麦小工具合集插件开发组 | 深夜潜水群全体", today=today)),
+        ]
+        for label, jq_spec in jq_cases:
+            jq_out = Path(td) / f"jinqi_{label}.jpg"
+            render_jinqi(ASSETS / "jinqi_bg.png", ASSETS / "MaShanZheng.ttf", jq_out, jq_spec,
+                         fallback_font_path=ASSETS / "NotoSansSC.ttf")
+            with _Image.open(jq_out) as im:
+                got_size = im.size
+            check(f"锦旗渲染输出（{label}）",
+                  jq_out.exists() and jq_out.stat().st_size > 20_000 and got_size == BG_SIZE,
+                  f"{jq_out.stat().st_size if jq_out.exists() else 0} bytes / size={got_size}")
+
+        # 缺字回退：毛笔楷体缺生僻字时自动切到 Noto Sans SC，避免豆腐块
+        fonts = FontSet(ASSETS / "MaShanZheng.ttf", ASSETS / "NotoSansSC.ttf", 60)
+        check("锦旗缺字回退：常用字用主字体、生僻字切回退字体",
+              fonts.pick("麦") is fonts.primary and fonts.pick("㸚") is not fonts.primary)
+        check("锦旗缺字回退：无回退字体时仍返回主字体",
+              FontSet(ASSETS / "MaShanZheng.ttf", None, 60).pick("㸚") is not None)
 
     # ---- 7. 一言连通性（尽力而为） -----------------------------------------
     try:

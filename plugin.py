@@ -1,8 +1,18 @@
 """麦麦小工具合集（部分功能移植自 AstrBot astrbot_plugin_essential）。
 
-功能：喜报/悲报图片生成、一言（/一言，回复不计入消息）、答案之书（<问题> 翻看答案）、
-今天吃什么（命令 + 被动触发：关键词概率推荐/复读，移植自 astrbot_plugin_what_to_eat）、
-群早晚安作息记录。同时注册 3 个 LLM 工具（deferred 池，由麦麦经 tool_search 按需发现）。
+功能：喜报/悲报图片生成、锦旗图片生成、一言（/一言，回复不计入消息）、
+答案之书（<问题> 翻看答案）、今天吃什么（命令 + 被动触发：关键词概率推荐/复读，
+移植自 astrbot_plugin_what_to_eat）、群早晚安作息记录。
+同时注册 4 个 LLM 工具（deferred 池，由麦麦经 tool_search 按需发现）。
+
+模块划分（同目录平铺，互不 import，只传数据）：
+    plugin.py                 组件装配：命令 / 工具 / Hook / 配置模型
+    essential_services.py     外部 API 客户端
+    essential_storage.py      data_dir JSON 持久化
+    essential_render_card.py  喜报/悲报渲染
+    essential_jinqi.py        锦旗内容规格（参数解析、分列、日期）
+    essential_render_jinqi.py 锦旗渲染
+    essential_passive_eat.py  "今天吃什么"被动触发与限流
 """
 
 from __future__ import annotations
@@ -14,7 +24,7 @@ import importlib.util
 import re
 import sys
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from maibot_sdk import Command, Field, HookHandler, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.types import (
@@ -44,6 +54,8 @@ def _load_sibling_module(stem: str) -> Any:
 _services = _load_sibling_module("essential_services")
 _storage = _load_sibling_module("essential_storage")
 _render = _load_sibling_module("essential_render_card")
+_jinqi = _load_sibling_module("essential_jinqi")
+_render_jinqi = _load_sibling_module("essential_render_jinqi")
 
 fetch_hitokoto = _services.fetch_hitokoto
 AnswerBook = _storage.AnswerBook
@@ -52,6 +64,10 @@ GoodMorningStore = _storage.GoodMorningStore
 strip_bracket_placeholders = _storage.strip_bracket_placeholders
 render_report_card = _render.render_report_card
 report_output_path = _render.report_output_path
+JinqiError = _jinqi.JinqiError
+build_jinqi_spec = _jinqi.build_spec
+render_jinqi = _render_jinqi.render_jinqi
+jinqi_output_path = _render_jinqi.jinqi_output_path
 
 _passive_eat = _load_sibling_module("essential_passive_eat")
 PassiveRateLimiter = _passive_eat.PassiveRateLimiter
@@ -59,7 +75,7 @@ PassiveResponder = _passive_eat.PassiveResponder
 FoodImageIndex = _passive_eat.FoodImageIndex
 sniff_image_ext = _passive_eat.sniff_image_ext
 
-SUPPORTED_CONFIG_VERSION = "1.3.2"  # 与 manifest version 保持同步
+SUPPORTED_CONFIG_VERSION = "1.4.0"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -120,6 +136,31 @@ class HitokotoSection(PluginConfigBase):
     request_timeout_sec: int = Field(default=10, ge=1, description="一言 API 请求超时（秒）")
 
 
+class JinqiSection(PluginConfigBase):
+    """锦旗。"""
+
+    __ui_label__ = "锦旗"
+    __ui_icon__ = "military_tech"
+    __ui_order__ = 5
+
+    enabled: bool = Field(default=True, description="是否启用 /锦旗 命令与锦旗工具")
+    big_font_size: int = Field(
+        default=110, ge=40, le=180,
+        description="感谢语字号上限（列太长时自动缩小，列短时按此字号放大）",
+    )
+    small_font_size: int = Field(
+        default=42, ge=16, le=90, description="赠予对象 / 落款字号"
+    )
+    date_style: Literal["chinese", "numeric", "none"] = Field(
+        default="chinese",
+        description="日期写法：chinese=二〇二六年九月廿七；numeric=2026-09-27；none=不显示",
+    )
+    default_signer: str = Field(
+        default="",
+        description="落款默认值；留空则用发送者昵称 +「敬赠」，昵称取不到时该栏留空",
+    )
+
+
 class WhatToEatSection(PluginConfigBase):
     """今天吃什么（命令 + 被动触发）。"""
 
@@ -156,6 +197,7 @@ class EssentialConfig(PluginConfigBase):
     good_morning: GoodMorningSection = Field(default_factory=GoodMorningSection)
     hitokoto: HitokotoSection = Field(default_factory=HitokotoSection)
     what_to_eat: WhatToEatSection = Field(default_factory=WhatToEatSection)
+    jinqi: JinqiSection = Field(default_factory=JinqiSection)
 
 
 # ---------------------------------------------------------------------------
@@ -283,12 +325,55 @@ class EssentialPlugin(MaiBotPlugin):
         if not sent:
             await self.ctx.send.text("图片发送失败了，请查看主进程日志排查。", stream_id)
 
+    async def _send_jinqi_card(
+        self, *, payload: str, stream_id: str, fallback_signer: str = ""
+    ) -> tuple[bool, str]:
+        """生成锦旗图片并发送；返回 (是否成功, 给用户看的说明)。
+
+        参数整理交给 essential_jinqi（纯逻辑、可离线单测），
+        绘制交给 essential_render_jinqi，本方法只做装配与发送。
+        """
+        cfg = self.config.jinqi
+        try:
+            spec = build_jinqi_spec(
+                payload,
+                fallback_signer=fallback_signer or cfg.default_signer,
+                date_style=cfg.date_style,
+            )
+        except JinqiError as e:
+            return False, str(e)
+
+        out_path = jinqi_output_path(self.ctx.paths.runtime_dir)
+        try:
+            await asyncio.to_thread(
+                render_jinqi,
+                _PLUGIN_DIR / "assets" / "jinqi_bg.png",
+                _PLUGIN_DIR / "assets" / "MaShanZheng.ttf",
+                out_path,
+                spec,
+                fallback_font_path=_PLUGIN_DIR / "assets" / "NotoSansSC.ttf",
+                big_font_size=int(cfg.big_font_size),
+                small_font_size=int(cfg.small_font_size),
+            )
+            image_b64 = base64.b64encode(out_path.read_bytes()).decode("ascii")
+        finally:
+            try:
+                out_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        sent = await self.ctx.send.image(image_b64, stream_id)
+        if not sent:
+            return False, "锦旗图片发送失败了，请查看主进程日志排查。"
+        return True, f"已生成锦旗：{' '.join(spec.thanks_columns)}"
+
     # -- 命令组件 -----------------------------------------------------------
 
     MENU_TEXT = (
         "【麦麦小工具合集 · 指令列表】\n"
         "/喜报 <内容> —— 生成喜报图片\n"
         "/悲报 <内容> —— 生成悲报图片\n"
+        "/锦旗 <感谢语> | <赠予对象> | <落款对象> —— 生成锦旗图片（后两段可省）\n"
         "一言 [文字] —— 随机一条一言（/ 可省；回复不计入消息）\n"
         "<问题> 翻看答案 —— 答案之书，随机翻一页\n"
         "/今天吃什么 —— 立即推荐今天吃什么（有绑定图则图文发送）\n"
@@ -296,7 +381,15 @@ class EssentialPlugin(MaiBotPlugin):
         "聊天中提到“吃什么” —— 概率推荐美食或复读“是啊，吃什么”（被动触发）\n"
         "早安 / 晚安 —— 记录作息并统计（麦麦可能会接话）\n"
         "/工具列表 —— 显示本菜单\n"
-        "本插件另有 3 个 LLM 工具（一言/推荐食物/喜报悲报），麦麦会在合适时机自主调用。"
+        "本插件另有 4 个 LLM 工具（一言/推荐食物/喜报悲报/锦旗），麦麦会在合适时机自主调用。"
+    )
+
+    JINQI_USAGE = (
+        "用法：/锦旗 感谢语 | 赠予对象 | 落款对象\n"
+        "例：/锦旗 助人为乐 情暖人心 | 赠：麦麦 | 全体群友\n"
+        "· 感谢语必填，最多 16 字；中间空一格或用 / 隔开即分成两列。\n"
+        "· 赠予对象可省略（省略则不写「赠：」那一列），会自动补「赠：」前缀。\n"
+        "· 落款可省略，默认用你的昵称 +「敬赠」。"
     )
 
     @Command("tool_list", description="查看本插件全部指令", pattern=r"(?<!\S)/工具列表(?:\s*\[[^\]]*\])*\s*$")
@@ -328,6 +421,28 @@ class EssentialPlugin(MaiBotPlugin):
             return False, "缺少内容", True
         await self._send_report_card(happy=False, text=text, stream_id=stream_id)
         return True, "悲报已生成", True
+
+    @Command(
+        "jinqi",
+        description="锦旗图片生成",
+        pattern=r"(?<!\S)/锦旗(?:\s+(?P<text>[\s\S]+?))?\s*(?:\[[^\]]*\]\s*)*$",
+    )
+    async def cmd_jinqi(self, **kwargs: Any):
+        if not self.config.jinqi.enabled:
+            return False, "锦旗功能已在配置中关闭", True
+        text = strip_bracket_placeholders(
+            str((kwargs.get("matched_groups") or {}).get("text") or "")
+        ).strip()
+        stream_id = self._stream_id(kwargs)
+        if not text:
+            await self.ctx.send.text(self.JINQI_USAGE, stream_id)
+            return False, "缺少内容", True
+        ok, message = await self._send_jinqi_card(
+            payload=text, stream_id=stream_id, fallback_signer=self._nickname(kwargs)
+        )
+        if not ok:
+            await self.ctx.send.text(message, stream_id)
+        return ok, message, True
 
     @Command(
         "answer_book",
@@ -564,6 +679,63 @@ class EssentialPlugin(MaiBotPlugin):
         except Exception as e:  # noqa: BLE001
             return {"content": f"喜报/悲报生成失败: {e}"}
         return {"content": f"已生成并发送{'喜报' if happy else '悲报'}图片：{text}"}
+
+    @Tool(
+        "jinqi_banner",
+        brief_description="生成并发送锦旗（表彰/致谢）图片",
+        detailed_description=(
+            "把感谢语渲染成传统红底金字锦旗图片并发送到当前会话。"
+            "仅当用户明确要求做锦旗、送锦旗、表彰或致谢某人/某单位时调用，不要主动滥用。"
+            "参数：thanks（string，必填，感谢语，最多 16 字，中间空一格或用 / 隔开可分成两列，"
+            "如「助人为乐 情暖人心」）；recipient（string，可选，赠予对象，如「麦麦」，"
+            "会自动补「赠：」前缀）；signer（string，可选，落款，如「全体群友」，省略则用发送者昵称）。"
+        ),
+        parameters=[
+            ToolParameterInfo(
+                name="thanks",
+                param_type=ToolParamType.STRING,
+                description="锦旗上的感谢语，最多 16 字；用空格或 / 分成两列",
+                required=True,
+            ),
+            ToolParameterInfo(
+                name="recipient",
+                param_type=ToolParamType.STRING,
+                description="赠予对象，如「麦麦」「全体群友」；省略则不写该栏",
+                required=False,
+                default="",
+            ),
+            ToolParameterInfo(
+                name="signer",
+                param_type=ToolParamType.STRING,
+                description="落款，如「全体群友」；省略则用发送者昵称 +「敬赠」",
+                required=False,
+                default="",
+            ),
+        ],
+    )
+    async def tool_jinqi_banner(
+        self, thanks: str = "", recipient: str = "", signer: str = "", **kwargs: Any
+    ):
+        if not self.config.jinqi.enabled:
+            return {"content": "锦旗功能当前已关闭。"}
+        # `|` 是分段符，出现在感谢语里会串味，统一换成 `/`
+        clean_thanks = (thanks or "").strip().replace("|", "/")
+        if not clean_thanks:
+            return {"content": "缺少 thanks 参数，未生成锦旗。"}
+        stream_id = self._stream_id(kwargs)
+        if not stream_id:
+            return {"content": "当前调用没有会话上下文，无法发送图片。"}
+        payload = " | ".join(
+            [clean_thanks, (recipient or "").strip().replace("|", "/"),
+             (signer or "").strip().replace("|", "/")]
+        )
+        try:
+            ok, message = await self._send_jinqi_card(
+                payload=payload, stream_id=stream_id, fallback_signer=self._nickname(kwargs)
+            )
+        except Exception as e:  # noqa: BLE001
+            return {"content": f"锦旗生成失败: {e}"}
+        return {"content": message if ok else f"锦旗未生成：{message}"}
 
     # -- 被动触发（今天吃什么，移植自 astrbot_plugin_what_to_eat） -----------
 
