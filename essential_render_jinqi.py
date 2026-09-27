@@ -4,8 +4,7 @@
 
     赠予对象（顶部对齐） → 感谢语一 → 感谢语二 → 落款 → 日期（底部对齐）
 
-底图 assets/jinqi_bg.png 由 tests/make_jinqi_bg.py 从公开免费模板素材
-（tests/jinqi_bg_src.jpg，338×450）放大 2.4 倍并轻量锐化得到（811×1080）；
+底图 assets/jinqi_bg.png 是一张 811×1080 的竖幅锦旗图（红丝绒旗面 + 金杆流苏）；
 文字用毛笔楷体 Ma Shan Zheng 叠加，缺字自动回退到 Noto Sans SC，避免出现豆腐块。
 
 与 essential_jinqi 的边界：本模块不 import 它，只按属性读取传入的 spec
@@ -20,11 +19,12 @@ from typing import Protocol, Sequence
 
 from PIL import Image, ImageDraw, ImageFont
 
-# 底图尺寸，必须与 tests/make_jinqi_bg.py 的输出一致（源图 338×450 ×2.4）
+# 底图尺寸，必须与 assets/jinqi_bg.png 的实际尺寸一致
 BG_SIZE = (811, 1080)
 
 # 文字可用区域：落在红布内、金色围边以内、底部波浪以上
-# （源图坐标 红布 x56..285 / y43..385，围边内侧 x53 / x286，两侧直边到 y355）
+# （以下数字按底图等比放大前的坐标系量取：红布 x56..285 / y43..385，
+#   围边内侧 x53 / x286，两侧直边到 y355，整体 ×2.4 后即得上面的值）
 AREA_X0, AREA_Y0 = 149, 130
 AREA_X1, AREA_Y1 = 672, 830
 

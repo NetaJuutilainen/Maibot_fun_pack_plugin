@@ -4,6 +4,6 @@
 __pycache__/
 *.pyc
 
-# 本地验证样张/临时产物
+# 本地验证脚本与中间产物（只留本地，不进仓库）
+/tests/
 *.jpg.tmp
-tests/out/
