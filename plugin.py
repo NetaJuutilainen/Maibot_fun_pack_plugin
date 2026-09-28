@@ -5,6 +5,11 @@
 移植自 astrbot_plugin_what_to_eat）、群早晚安作息记录。
 同时注册 4 个 LLM 工具（deferred 池，由麦麦经 tool_search 按需发现）。
 
+**功能开关（v1.5.0 起）**：六个功能各有一个 `[<节>].enabled`，另有
+`[what_to_eat].passive_enabled` 单独控制被动触发。命令 / 工具 / Hook 都是装饰器在
+类定义时注册的，运行时无法注销，所以开关统一走 `_feature_enabled()` 做**入口提前返回**：
+命令被吞掉不回复，工具返回提示文案，Hook 直接 return None。
+
 模块划分（同目录平铺，互不 import，只传数据）：
     plugin.py                 组件装配：命令 / 工具 / Hook / 配置模型
     essential_services.py     外部 API 客户端
@@ -75,7 +80,7 @@ PassiveResponder = _passive_eat.PassiveResponder
 FoodImageIndex = _passive_eat.FoodImageIndex
 sniff_image_ext = _passive_eat.sniff_image_ext
 
-SUPPORTED_CONFIG_VERSION = "1.4.0"  # 与 manifest version 保持同步
+SUPPORTED_CONFIG_VERSION = "1.5.0"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -85,6 +90,30 @@ TIME_FMT = "%Y-%m-%d %H:%M:%S"
 # 配置模型
 # ---------------------------------------------------------------------------
 
+def _ui_field(label: str, hint: str = "", **kwargs: Any) -> Any:
+    """构造带 WebUI 中文元数据的 `Field`。
+
+    WebUI 的插件配置页（`dashboard/assets/plugin-config-*.js`）只渲染
+    `json_schema_extra` 里的两个键：
+
+        label —— 字段主标签（缺失时**回退成英文字段名**，这就是之前页面全是英文的原因）
+        hint  —— 控件下方的补充说明（缺失或空串时该行不渲染）
+
+    **`description` 在插件配置页里完全不被读取**（只用于 API 返回的 schema）。
+    所以这里用同一段中文同时填 `description`（给 API / 其它宿主界面）与
+    `hint`（给插件配置页），`label` 另给一个简短中文名 —— 同一份文案只写一遍。
+
+    `hint` 留空表示「标签本身已说清」，此时不写 `hint`，避免 UI 上同一句话显示两遍。
+
+    `json_schema_extra` 里已有的键（如 `hidden` / `disabled`）会被保留。
+    """
+    extra = dict(kwargs.pop("json_schema_extra", None) or {})
+    extra.setdefault("label", label)
+    if hint:
+        extra.setdefault("hint", hint)
+    return Field(description=hint or label, json_schema_extra=extra, **kwargs)
+
+
 class PluginSectionConfig(PluginConfigBase):
     """插件基础配置。"""
 
@@ -92,10 +121,11 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_icon__ = "celebration"
     __ui_order__ = 0
 
-    enabled: bool = Field(default=True, description="是否启用插件")
-    config_version: str = Field(
+    enabled: bool = _ui_field("启用插件", "是否启用插件", default=True)
+    config_version: str = _ui_field(
+        "配置版本",
+        "配置版本（与插件版本同步）",
         default=SUPPORTED_CONFIG_VERSION,
-        description="配置版本（与插件版本同步）",
         json_schema_extra={"hidden": True, "disabled": True},
     )
 
@@ -107,7 +137,12 @@ class ReportSection(PluginConfigBase):
     __ui_icon__ = "campaign"
     __ui_order__ = 1
 
-    font_size: int = Field(default=65, ge=20, le=200, description="喜报/悲报字体大小")
+    enabled: bool = _ui_field(
+        "启用喜报 / 悲报", "启用 /喜报、/悲报 命令与喜报/悲报工具", default=True
+    )
+    font_size: int = _ui_field(
+        "字体大小", "喜报/悲报字体大小", default=65, ge=20, le=200
+    )
 
 
 class GoodMorningSection(PluginConfigBase):
@@ -117,12 +152,17 @@ class GoodMorningSection(PluginConfigBase):
     __ui_icon__ = "bedtime"
     __ui_order__ = 2
 
-    cooldown_minutes: int = Field(
-        default=30, ge=0, description="同一用户两次早晚安的最小间隔（分钟，0 为不限制）"
+    enabled: bool = _ui_field("启用早晚安", "启用 早安 / 晚安 作息记录", default=True)
+    cooldown_minutes: int = _ui_field(
+        "记录冷却（分钟）",
+        "同一用户两次早晚安的最小间隔（分钟，0 为不限制）",
+        default=30,
+        ge=0,
     )
-    forward_to_mai: bool = Field(
+    forward_to_mai: bool = _ui_field(
+        "记录同步给麦麦",
+        "记录后把统计信息追加进麦麦上下文，供其自行决定是否再回复",
         default=True,
-        description="记录后把统计信息追加进麦麦上下文，供其自行决定是否再回复",
     )
 
 
@@ -133,7 +173,10 @@ class HitokotoSection(PluginConfigBase):
     __ui_icon__ = "format_quote"
     __ui_order__ = 3
 
-    request_timeout_sec: int = Field(default=10, ge=1, description="一言 API 请求超时（秒）")
+    enabled: bool = _ui_field("启用一言", "启用 一言 命令与一言工具", default=True)
+    request_timeout_sec: int = _ui_field(
+        "请求超时（秒）", "一言 API 请求超时（秒）", default=10, ge=1
+    )
 
 
 class JinqiSection(PluginConfigBase):
@@ -143,21 +186,26 @@ class JinqiSection(PluginConfigBase):
     __ui_icon__ = "military_tech"
     __ui_order__ = 5
 
-    enabled: bool = Field(default=True, description="是否启用 /锦旗 命令与锦旗工具")
-    big_font_size: int = Field(
-        default=110, ge=40, le=180,
-        description="感谢语字号上限（列太长时自动缩小，列短时按此字号放大）",
+    enabled: bool = _ui_field("启用锦旗", "启用 /锦旗 命令与锦旗工具", default=True)
+    big_font_size: int = _ui_field(
+        "感谢语字号上限",
+        "感谢语字号上限（列太长时自动缩小，列短时按此字号放大）",
+        default=110,
+        ge=40,
+        le=180,
     )
-    small_font_size: int = Field(
-        default=42, ge=16, le=90, description="赠予对象 / 落款字号"
+    small_font_size: int = _ui_field(
+        "副文字号", "赠予对象 / 落款字号", default=42, ge=16, le=90
     )
-    date_style: Literal["chinese", "numeric", "none"] = Field(
+    date_style: Literal["chinese", "numeric", "none"] = _ui_field(
+        "日期样式",
+        "日期写法：chinese=二〇二六年九月廿七；numeric=2026-09-27；none=不显示",
         default="chinese",
-        description="日期写法：chinese=二〇二六年九月廿七；numeric=2026-09-27；none=不显示",
     )
-    default_signer: str = Field(
+    default_signer: str = _ui_field(
+        "默认落款",
+        "落款默认值；留空则用发送者昵称 +「敬赠」，昵称取不到时该栏留空",
         default="",
-        description="落款默认值；留空则用发送者昵称 +「敬赠」，昵称取不到时该栏留空",
     )
 
 
@@ -168,24 +216,58 @@ class WhatToEatSection(PluginConfigBase):
     __ui_icon__ = "restaurant"
     __ui_order__ = 4
 
-    enabled: bool = Field(
-        default=True, description="启用被动触发：聊天含关键词时按概率推荐食物或复读"
+    enabled: bool = _ui_field(
+        "启用今天吃什么", "启用 /今天吃什么 命令与推荐食物工具", default=True
     )
-    trigger_keywords: list[str] = Field(
-        default_factory=lambda: ["吃什么"], description="被动触发关键词列表（命中任意一个即触发）"
+    passive_enabled: bool = _ui_field(
+        "启用被动触发",
+        "启用被动触发：聊天含关键词时按概率推荐食物或复读",
+        default=True,
     )
-    recommend_probability: float = Field(
-        default=0.3, ge=0.0, le=1.0, description="被动触发时推荐食物的概率，其余概率复读"
+    trigger_keywords: list[str] = _ui_field(
+        "触发关键词",
+        "被动触发关键词列表（命中任意一个即触发）",
+        default_factory=lambda: ["吃什么"],
     )
-    intercept_message: bool = Field(
-        default=True, description="被动回复后拦截该消息（麦麦不再对其回复）；关闭则麦麦也可以接话"
+    recommend_probability: float = _ui_field(
+        "推荐食物概率",
+        "被动触发时推荐食物的概率，其余概率复读",
+        default=0.3,
+        ge=0.0,
+        le=1.0,
     )
-    rate_limit_enabled: bool = Field(default=True, description="启用频率限制（防多 Bot 循环）")
-    rate_limit_max: int = Field(default=3, ge=1, description="时间窗口内最大被动响应次数，超过后强制推荐")
-    rate_limit_window_seconds: int = Field(default=60, ge=1, description="频率限制窗口（秒）")
-    echo_cooldown_enabled: bool = Field(default=True, description="启用复读冷却")
-    echo_cooldown_seconds: int = Field(
-        default=15, ge=0, description="复读后的冷却秒数，冷却期内触发强制推荐"
+    intercept_message: bool = _ui_field(
+        "被动回复后拦截消息",
+        "被动回复后拦截该消息（麦麦不再对其回复）；关闭则麦麦也可以接话",
+        default=True,
+    )
+    rate_limit_enabled: bool = _ui_field(
+        "启用频率限制", "启用频率限制（防多 Bot 循环）", default=True
+    )
+    rate_limit_max: int = _ui_field(
+        "窗口内最大响应次数",
+        "时间窗口内最大被动响应次数，超过后强制推荐",
+        default=3,
+        ge=1,
+    )
+    rate_limit_window_seconds: int = _ui_field(
+        "频率限制窗口（秒）", default=60, ge=1
+    )
+    echo_cooldown_enabled: bool = _ui_field("启用复读冷却", default=True)
+    echo_cooldown_seconds: int = _ui_field(
+        "复读冷却（秒）", "复读后的冷却秒数，冷却期内触发强制推荐", default=15, ge=0
+    )
+
+
+class AnswerBookSection(PluginConfigBase):
+    """答案之书。"""
+
+    __ui_label__ = "答案之书"
+    __ui_icon__ = "menu_book"
+    __ui_order__ = 6
+
+    enabled: bool = _ui_field(
+        "启用答案之书", "启用「<问题> 翻看答案」", default=True
     )
 
 
@@ -198,6 +280,7 @@ class EssentialConfig(PluginConfigBase):
     hitokoto: HitokotoSection = Field(default_factory=HitokotoSection)
     what_to_eat: WhatToEatSection = Field(default_factory=WhatToEatSection)
     jinqi: JinqiSection = Field(default_factory=JinqiSection)
+    answer_book: AnswerBookSection = Field(default_factory=AnswerBookSection)
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +372,25 @@ class EssentialPlugin(MaiBotPlugin):
         except Exception:
             return ""
 
+    def _feature_enabled(self, section: str) -> bool:
+        """统一读取功能开关，供命令 / 工具 / Hook 的入口门控使用。
+
+        section 传配置节点名：report / good_morning / hitokoto /
+        what_to_eat / jinqi / answer_book。
+
+        · 插件总开关（`[plugin].enabled`）关闭时，一律视为关闭；
+        · 节点或字段缺失时按「启用」处理，避免旧配置把功能整体锁死。
+
+        注意：命令 / 工具 / Hook 都由装饰器在**类定义时**注册，运行时无法注销。
+        所以开关只做「入口提前返回」——命令被吞掉不回复，工具返回提示文案。
+        """
+        if not bool(getattr(self.config.plugin, "enabled", True)):
+            return False
+        node = getattr(self.config, section, None)
+        if node is None:
+            return True
+        return bool(getattr(node, "enabled", True))
+
     async def _append_context(self, stream_id: str, note: str) -> None:
         """向麦麦会话追加一条插件上下文（失败只记日志，不影响命令结果）。"""
         if not stream_id:
@@ -369,20 +471,45 @@ class EssentialPlugin(MaiBotPlugin):
 
     # -- 命令组件 -----------------------------------------------------------
 
-    MENU_TEXT = (
-        "【麦麦小工具合集 · 指令列表】\n"
-        "/喜报 <内容> —— 生成喜报图片\n"
-        "/悲报 <内容> —— 生成悲报图片\n"
-        "/锦旗 <感谢语> | <赠予对象> | <落款对象> —— 生成锦旗图片（后两段可省）\n"
-        "一言 [文字] —— 随机一条一言（/ 可省；回复不计入消息）\n"
-        "<问题> 翻看答案 —— 答案之书，随机翻一页\n"
-        "/今天吃什么 —— 立即推荐今天吃什么（有绑定图则图文发送）\n"
-        "/今天吃什么 添加|删除 <食物...> —— 维护食物清单\n"
-        "聊天中提到“吃什么” —— 概率推荐美食或复读“是啊，吃什么”（被动触发）\n"
-        "早安 / 晚安 —— 记录作息并统计（麦麦可能会接话）\n"
-        "/工具列表 —— 显示本菜单\n"
-        "本插件另有 4 个 LLM 工具（一言/推荐食物/喜报悲报/锦旗），麦麦会在合适时机自主调用。"
-    )
+    def _build_menu_text(self) -> str:
+        """按当前开关拼装指令菜单：已关闭的功能不再展示，避免宣传用不了的功能。"""
+        lines = ["【麦麦小工具合集 · 指令列表】"]
+
+        if self._feature_enabled("report"):
+            lines.append("/喜报 <内容> —— 生成喜报图片")
+            lines.append("/悲报 <内容> —— 生成悲报图片")
+        if self._feature_enabled("jinqi"):
+            lines.append("/锦旗 <感谢语> | <赠予对象> | <落款对象> —— 生成锦旗图片（后两段可省）")
+        if self._feature_enabled("hitokoto"):
+            lines.append("一言 [文字] —— 随机一条一言（/ 可省；回复不计入消息）")
+        if self._feature_enabled("answer_book"):
+            lines.append("<问题> 翻看答案 —— 答案之书，随机翻一页")
+        if self._feature_enabled("what_to_eat"):
+            lines.append("/今天吃什么 —— 立即推荐今天吃什么（有绑定图则图文发送）")
+            lines.append("/今天吃什么 添加|删除 <食物...> —— 维护食物清单")
+            if bool(getattr(self.config.what_to_eat, "passive_enabled", True)):
+                lines.append(
+                    "聊天中提到“吃什么” —— 概率推荐美食或复读“是啊，吃什么”（被动触发）"
+                )
+        if self._feature_enabled("good_morning"):
+            lines.append("早安 / 晚安 —— 记录作息并统计（麦麦可能会接话）")
+
+        lines.append("/工具列表 —— 显示本菜单")
+
+        tool_labels = [
+            label for label, enabled in (
+                ("一言", self._feature_enabled("hitokoto")),
+                ("推荐食物", self._feature_enabled("what_to_eat")),
+                ("喜报悲报", self._feature_enabled("report")),
+                ("锦旗", self._feature_enabled("jinqi")),
+            ) if enabled
+        ]
+        if tool_labels:
+            lines.append(
+                f"本插件另有 {len(tool_labels)} 个 LLM 工具"
+                f"（{'/'.join(tool_labels)}），麦麦会在合适时机自主调用。"
+            )
+        return "\n".join(lines)
 
     JINQI_USAGE = (
         "用法：/锦旗 感谢语 | 赠予对象 | 落款对象\n"
@@ -395,11 +522,13 @@ class EssentialPlugin(MaiBotPlugin):
     @Command("tool_list", description="查看本插件全部指令", pattern=r"(?<!\S)/工具列表(?:\s*\[[^\]]*\])*\s*$")
     async def cmd_tool_list(self, **kwargs: Any):
         stream_id = self._stream_id(kwargs)
-        await self.ctx.send.text(self.MENU_TEXT, stream_id)
+        await self.ctx.send.text(self._build_menu_text(), stream_id)
         return True, "已发送指令列表", True
 
     @Command("happy_report", description="喜报图片生成", pattern=r"(?<!\S)/喜报\s+(?P<text>[\s\S]+?)\s*(?:\[[^\]]*\]\s*)*$")
     async def cmd_happy_report(self, **kwargs: Any):
+        if not self._feature_enabled("report"):
+            return False, "喜报功能已在配置中关闭", True
         text = strip_bracket_placeholders(
             str((kwargs.get("matched_groups") or {}).get("text") or "")
         ).strip()
@@ -412,6 +541,8 @@ class EssentialPlugin(MaiBotPlugin):
 
     @Command("sad_report", description="悲报图片生成", pattern=r"(?<!\S)/悲报\s+(?P<text>[\s\S]+?)\s*(?:\[[^\]]*\]\s*)*$")
     async def cmd_sad_report(self, **kwargs: Any):
+        if not self._feature_enabled("report"):
+            return False, "悲报功能已在配置中关闭", True
         text = strip_bracket_placeholders(
             str((kwargs.get("matched_groups") or {}).get("text") or "")
         ).strip()
@@ -428,7 +559,7 @@ class EssentialPlugin(MaiBotPlugin):
         pattern=r"(?<!\S)/锦旗(?:\s+(?P<text>[\s\S]+?))?\s*(?:\[[^\]]*\]\s*)*$",
     )
     async def cmd_jinqi(self, **kwargs: Any):
-        if not self.config.jinqi.enabled:
+        if not self._feature_enabled("jinqi"):
             return False, "锦旗功能已在配置中关闭", True
         text = strip_bracket_placeholders(
             str((kwargs.get("matched_groups") or {}).get("text") or "")
@@ -451,6 +582,8 @@ class EssentialPlugin(MaiBotPlugin):
     )
     async def cmd_answer_book(self, **kwargs: Any):
         """经典答案之书玩法：从本地词条库随机抽一条，引用回复。"""
+        if not self._feature_enabled("answer_book"):
+            return False, "答案之书已在配置中关闭", True
         question = str((kwargs.get("matched_groups") or {}).get("question") or "").strip()
         stream_id = self._stream_id(kwargs)
         if not question:
@@ -479,6 +612,8 @@ class EssentialPlugin(MaiBotPlugin):
     @Command("hitokoto", description="来一条一言", pattern=r"(?<!\S)/?一言(?:\s+(?P<extra>[\s\S]+?))?\s*(?:\[[^\]]*\]\s*)*$")
     async def cmd_hitokoto(self, **kwargs: Any):
         """一言：随取随看，命令回复不入库、不同步进麦麦上下文（不计入消息）。"""
+        if not self._feature_enabled("hitokoto"):
+            return False, "一言功能已在配置中关闭", True
         stream_id = self._stream_id(kwargs)
         try:
             data = await fetch_hitokoto(timeout=int(self.config.hitokoto.request_timeout_sec))
@@ -501,6 +636,8 @@ class EssentialPlugin(MaiBotPlugin):
         pattern=r"(?<!\S)/今天吃什么(?:\s+(?P<action>添加|删除)(?:\s+(?P<items>[\s\S]+?))?)?(?:\s*\[[^\]]*\])*\s*$",
     )
     async def cmd_what_to_eat(self, **kwargs: Any):
+        if not self._feature_enabled("what_to_eat"):
+            return False, "今天吃什么功能已在配置中关闭", True
         groups = kwargs.get("matched_groups") or {}
         action = str(groups.get("action") or "").strip()
         items = str(groups.get("items") or "").strip()
@@ -562,6 +699,8 @@ class EssentialPlugin(MaiBotPlugin):
         pattern=r"(?<!\S)/?(?P<kind>早安|晚安)[呀啊喵哦咯啦哟唷~～，,。！!。\s]*$",
     )
     async def cmd_good_morning(self, **kwargs: Any):
+        if not self._feature_enabled("good_morning"):
+            return False, "早晚安功能已在配置中关闭", True
         kind = str((kwargs.get("matched_groups") or {}).get("kind") or "")
         stream_id = self._stream_id(kwargs)
         user_id = self._user_id(kwargs)
@@ -630,6 +769,8 @@ class EssentialPlugin(MaiBotPlugin):
         parameters=None,
     )
     async def tool_get_hitokoto(self, **kwargs: Any):
+        if not self._feature_enabled("hitokoto"):
+            return {"content": "一言功能当前已关闭，请勿再调用此工具。"}
         try:
             data = await fetch_hitokoto(timeout=int(self.config.hitokoto.request_timeout_sec))
         except Exception as e:  # noqa: BLE001
@@ -643,6 +784,8 @@ class EssentialPlugin(MaiBotPlugin):
         parameters=None,
     )
     async def tool_random_food(self, **kwargs: Any):
+        if not self._feature_enabled("what_to_eat"):
+            return {"content": "今天吃什么功能当前已关闭，请勿再调用此工具。"}
         return {"content": f"推荐：{self._food.choice()}"}
 
     @Tool(
@@ -667,6 +810,8 @@ class EssentialPlugin(MaiBotPlugin):
         ],
     )
     async def tool_report_card(self, text: str = "", mood: str = "happy", **kwargs: Any):
+        if not self._feature_enabled("report"):
+            return {"content": "喜报/悲报功能当前已关闭，请勿再调用此工具。"}
         text = (text or "").strip()
         if not text:
             return {"content": "缺少 text 参数，未生成。"}
@@ -716,8 +861,8 @@ class EssentialPlugin(MaiBotPlugin):
     async def tool_jinqi_banner(
         self, thanks: str = "", recipient: str = "", signer: str = "", **kwargs: Any
     ):
-        if not self.config.jinqi.enabled:
-            return {"content": "锦旗功能当前已关闭。"}
+        if not self._feature_enabled("jinqi"):
+            return {"content": "锦旗功能当前已关闭，请勿再调用此工具。"}
         # `|` 是分段符，出现在感谢语里会串味，统一换成 `/`
         clean_thanks = (thanks or "").strip().replace("|", "/")
         if not clean_thanks:
@@ -827,7 +972,12 @@ class EssentialPlugin(MaiBotPlugin):
         """被动触发：消息含"吃什么"类关键词时，按概率推荐食物或复读"是啊，吃什么"。"""
 
         cfg = self.config.what_to_eat
-        if not cfg.enabled or self._passive_responder is None:
+        # 命令/工具看 enabled，被动触发另看 passive_enabled —— 两者独立
+        if (
+            not self._feature_enabled("what_to_eat")
+            or not bool(getattr(cfg, "passive_enabled", True))
+            or self._passive_responder is None
+        ):
             return None
 
         message = kwargs.get("message") or {}

@@ -102,20 +102,37 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 
 ## 配置
 
-运行时配置文件 `config.toml` 由 Runner 自动生成（勿提交），支持热重载，主要项：
+运行时配置文件 `config.toml` 由 Runner 自动生成（勿提交），支持热重载。
+
+**功能开关** —— 关掉后命令不再响应，对应的 LLM 工具会返回「已关闭」提示；
+插件总开关 `[plugin].enabled` 关闭时全部失效：
+
+| 配置节 | 字段 | 默认 | 控制范围 |
+|---|---|---|---|
+| `[report]` | `enabled` | true | `/喜报`、`/悲报` 命令 + 喜报/悲报工具 |
+| `[good_morning]` | `enabled` | true | 早安 / 晚安 作息记录 |
+| `[hitokoto]` | `enabled` | true | 一言 命令 + 一言工具 |
+| `[what_to_eat]` | `enabled` | true | `/今天吃什么` 命令 + 推荐食物工具 |
+| `[what_to_eat]` | `passive_enabled` | true | **仅**被动触发（聊天含关键词时概率推荐 / 复读） |
+| `[jinqi]` | `enabled` | true | `/锦旗` 命令 + 锦旗工具 |
+| `[answer_book]` | `enabled` | true | `<问题> 翻看答案` |
+
+> 开关只做**入口拦截**，不会注销命令与工具：命令被静默吞掉，
+> 工具返回一条「功能当前已关闭」给麦麦（它据此不再反复调用）。
+> `/工具列表` 的菜单会随开关变化，已关闭的功能不再展示。
+
+其余可调项：
 
 | 配置节 | 字段 | 默认 | 说明 |
 |---|---|---|---|
 | `[report]` | `font_size` | 65 | 喜报/悲报字体大小（20~200） |
-| `[jinqi]` | `enabled` | true | 启用 `/锦旗` 命令与锦旗工具 |
-| `[jinqi]` | `big_font_size` | 96 | 感谢语字号上限（列太长自动缩小，列短按此放大） |
-| `[jinqi]` | `small_font_size` | 34 | 赠予对象 / 落款字号 |
+| `[jinqi]` | `big_font_size` | 110 | 感谢语字号上限（列太长自动缩小，列短按此放大） |
+| `[jinqi]` | `small_font_size` | 42 | 赠予对象 / 落款字号 |
 | `[jinqi]` | `date_style` | chinese | 日期写法：`chinese` / `numeric` / `none` |
 | `[jinqi]` | `default_signer` | "" | 落款默认值，留空则用发送者昵称 +「敬赠」 |
 | `[good_morning]` | `cooldown_minutes` | 30 | 同一用户两次早晚安的最小间隔（0 不限制） |
 | `[good_morning]` | `forward_to_mai` | true | 记录后把统计信息交给麦麦供其发挥 |
 | `[hitokoto]` | `request_timeout_sec` | 10 | 一言 API 请求超时（秒） |
-| `[what_to_eat]` | `enabled` | true | 启用被动触发 |
 | `[what_to_eat]` | `trigger_keywords` | ["吃什么"] | 被动触发关键词列表 |
 | `[what_to_eat]` | `recommend_probability` | 0.3 | 推荐食物的概率（其余复读） |
 | `[what_to_eat]` | `intercept_message` | true | 被动回复后是否拦截该消息 |
@@ -155,6 +172,7 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 
 | 版本 | 日期 | 更新内容 |
 |---|---|---|
+| **1.5.0** | 2026-09-28 | 六个功能各自独立开关（`[report]` / `[good_morning]` / `[hitokoto]` / `[what_to_eat]` / `[jinqi]` / `[answer_book]`）；被动触发拆出 `passive_enabled` 独立开关；`/工具列表` 菜单随开关动态拼装 |
 | **1.4.0** | 2026-09-27 | 新增**锦旗图片生成**：`/锦旗` 命令 + `jinqi_banner` 工具，毛笔楷书竖排、感谢语自动分列、字号自适应；新增 `[jinqi]` 配置节 |
 | **1.3.2** | 2026-09-19 | 插件图标定稿（麦麦吉祥物红金版，四个功能 emoji 徽章）；插件更名为**麦麦小工具合集** |
 | **1.3.1** | 2026-09-12 | 修复：命令正则容忍换行后的 `[图片：AI 描述]` 占位符尾巴，带图消息不再漏匹配 |

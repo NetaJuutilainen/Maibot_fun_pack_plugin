@@ -7,6 +7,46 @@
 
 ---
 
+## [1.5.0] - 2026-09-28
+
+### 新增
+
+- **六个功能各自独立开关**：`[report]` / `[good_morning]` / `[hitokoto]` / `[what_to_eat]` /
+  `[jinqi]` / `[answer_book]` 各新增 `enabled`，可单独关掉任意一个功能
+- `[what_to_eat].passive_enabled`：**被动触发独立开关** —— 可以只留 `/今天吃什么` 命令，
+  同时关掉聊天里的关键词自动接话
+- 新增 `[answer_book]` 配置节（答案之书此前没有独立配置节）
+
+### 修复
+
+- **WebUI 插件配置页全部改为中文**：此前每个字段的主标签都是英文字段名
+  （`enabled` / `font_size` / `trigger_keywords` …）。原因是插件配置页只渲染
+  `json_schema_extra` 里的 `label`（缺失时回退字段名）与 `hint`（控件下方说明），
+  **完全不读 `description`** —— 而本插件此前只写了 `description`。
+  现已通过 `_ui_field()` 为全部 25 个字段补上中文 `label`，并在需要时补 `hint` 说明；
+  同一段文案只写一遍，同时填 `description`（API 侧）与 `hint`（配置页侧）
+- 已知限制：`date_style` 下拉框的选项文本仍是 `chinese` / `numeric` / `none`
+  （前端把 `Literal` 值直接当选项名，无逐项本地化接口），含义已写在字段说明里
+
+### 变更
+
+- 开关统一由 `_feature_enabled()` 门控：插件总开关 `[plugin].enabled` 关闭时，所有功能一律视为关闭
+- 命令 / 工具 / Hook 均**不注销**（装饰器在类定义时注册，运行时无法摘除），只在入口提前返回：
+  - **命令**：吞掉消息不回复（沿用 `[jinqi].enabled` 原有行为）
+  - **工具**：返回提示文案，麦麦据此知道该功能已关闭，不会再反复调用
+  - **Hook**：直接 `return None`，不拦截消息
+- `/工具列表` 菜单改为**按开关动态拼装**：已关闭的功能不再出现，末尾的工具数量也随之变化
+- 修正 `[what_to_eat].enabled` 的语义：此前它**只挡被动 Hook，命令和工具照常可用**；
+  现在它统一管命令与工具，被动触发拆到 `passive_enabled`
+
+### 兼容性
+
+- 纯新增字段 + 一处语义拆分，**已有 `config.toml` 无需手工修改**：宿主检测到
+  `config_version` 由 `1.4.0` 升到 `1.5.0` 后按新 schema 重建，以新默认值打底、旧值覆盖，原有设置全部保留
+- 原来 `[what_to_eat].enabled = true` 的用户行为不变（`passive_enabled` 默认也是 true）
+
+---
+
 ## [1.4.0] - 2026-09-27
 
 ### 新增
