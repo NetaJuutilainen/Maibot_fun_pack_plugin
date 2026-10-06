@@ -7,7 +7,7 @@
   "author": { "name": "NetaJuutilainen", "url": "https://github.com/NetaJuutilainen" },
   "license": "MIT",
   "urls": { "repository": "https://github.com/NetaJuutilainen/Maibot_fun_pack_plugin" },
-  "host_application": { "min_version": "1.0.0", "max_version": "1.99.99" },
+  "host_application": { "min_version": "1.0.0", "max_version": "114.514.810" },
   "sdk": { "min_version": "2.5.0", "max_version": "2.99.99" },
   "dependencies": [
     { "type": "python_package", "name": "aiohttp", "version_spec": ">=3.8.0" },
