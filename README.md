@@ -1,4 +1,8 @@
-# 麦麦小工具合集
+<div align="center">
+  <img src="assets/icon.png" width="128" alt="麦麦小工具合集图标"/>
+  <h1>麦麦小工具合集</h1>
+  <p><b>麦爹的娱乐功能合集</b> —— 喜报 / 悲报 · 锦旗 · 一言 · 答案之书 · 今天吃什么 · 早晚安 · 今日宜忌 · 群友语录</p>
+</div>
 
 MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插件
 [astrbot_plugin_essential](https://github.com/Soulter/astrbot_plugin_essential)（Soulter / FateTrial）**，
