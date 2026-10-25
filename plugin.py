@@ -96,7 +96,7 @@ render_almanac = _render_almanac.render_almanac
 _quotes_mod = _load_sibling_module("essential_quotes")
 QuoteStore = _quotes_mod.QuoteStore
 
-SUPPORTED_CONFIG_VERSION = "1.6.1"  # 与 manifest version 保持同步
+SUPPORTED_CONFIG_VERSION = "1.6.2"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
