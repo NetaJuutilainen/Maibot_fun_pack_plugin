@@ -4,7 +4,7 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 [astrbot_plugin_essential](https://github.com/Soulter/astrbot_plugin_essential)（Soulter / FateTrial）**，
 全部代码均针对 MaiBot 插件体系重新设计实现。
 
-功能：**喜报 / 悲报图片生成、锦旗图片生成、一言（不计入消息）、答案之书（翻看答案）、今天吃什么（命令 + 被动触发）、群早晚安作息记录、指令菜单**，
+功能：**喜报 / 悲报图片生成、锦旗图片生成、一言（不计入消息）、答案之书（翻看答案）、今天吃什么（命令 + 被动触发）、群早晚安作息记录、今日宜忌（每日黄历）、群友语录（投稿 + 随机回放）、指令菜单**，
 并把这些能力同时注册为麦麦可自主调用的 LLM 工具。本插件以 **MIT** 协议开源，将持续更新。
 
 ## 效果预览
@@ -41,6 +41,9 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 | `/今天吃什么 删除 食物1 食物2 ...` | 从清单删除食物 | 否 |
 | 聊天中提到“吃什么” | **被动触发**（非命令）：按概率（默认 30%）推荐美食或复读“是啊，吃什么”；60 秒内被动响应超 3 次强制推荐、复读后 15 秒冷却（防多 Bot 循环）；回复后默认拦截该消息 | 默认拦截 |
 | 早安 / `晚安`（支持"晚安啦~"等常见后缀，`/` 可省） | 记录作息并回复统计（睡了多久 / 本群今天第 N 个睡觉的）；**之后放行消息，麦麦自行决定是否再回复** | 是 |
+| `今日宜忌`（`/` 可省，别名 `今日黄历`） | 发一张**黄历风图片**：宜 4 条 / 忌 3 条 + 十二时辰吉凶格 + 吉利方位、幸运数字、幸运色、幸运物、运势星级（满运盖「百无禁忌」章）；附**真实农历**（月日/干支年/生肖/日干支/冲煞）。**宜忌与梗内容同一天全群同结果**（日期做种子），第二天自动换新 | 否 |
+| `/投稿语录` | **群友语录投稿**：回复一张含图片的消息，把图片收进本群语录库（按图片内容哈希去重，每群上限默认 500 条） | 否 |
+| `/群友语录`（`/uu语录`、`/群u语录` 亦可） | 随机发一张本群投稿的语录图片（数据按群隔离） | 否 |
 
 ## 锦旗
 
@@ -91,6 +94,8 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 | `random_food` | 从食物清单随机推荐"今天吃什么" |
 | `report_card` | 生成并发送喜报/悲报图片（参数 `text`、`mood=happy/sad`） |
 | `jinqi_banner` | 生成并发送锦旗图片（参数 `thanks`、`recipient`、`signer`） |
+| `get_daily_almanac` | 取今日宜忌文字版（同一天结果固定；图片只在命令里发） |
+| `random_quote` | 从本群语录库随机抽一张投稿图片发送（仅群聊） |
 
 ## 安装
 
@@ -116,6 +121,8 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 | `[what_to_eat]` | `passive_enabled` | true | **仅**被动触发（聊天含关键词时概率推荐 / 复读） |
 | `[jinqi]` | `enabled` | true | `/锦旗` 命令 + 锦旗工具 |
 | `[answer_book]` | `enabled` | true | `<问题> 翻看答案` |
+| `[almanac]` | `enabled` | true | `今日宜忌` 命令 + 宜忌工具 |
+| `[quotes]` | `enabled` | true | `/投稿语录`、`/群友语录` 命令 + 语录工具 |
 
 > 开关只做**入口拦截**，不会注销命令与工具：命令被静默吞掉，
 > 工具返回一条「功能当前已关闭」给麦麦（它据此不再反复调用）。
@@ -138,10 +145,13 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 | `[what_to_eat]` | `intercept_message` | true | 被动回复后是否拦截该消息 |
 | `[what_to_eat]` | `rate_limit_enabled` / `rate_limit_max` / `rate_limit_window_seconds` | true / 3 / 60 | 频率限制（防多 Bot 循环） |
 | `[what_to_eat]` | `echo_cooldown_enabled` / `echo_cooldown_seconds` | true / 15 | 复读冷却 |
+| `[almanac]` | `custom_yi` / `custom_ji` | [] | 追加自定义宜/忌词条（与内置词条一起参与每日抽取） |
+| `[quotes]` | `max_quotes_per_group` | 500 | 每群语录上限，超出自动清理最旧（含图片文件） |
+| `[quotes]` | `migrate_legacy` | true | 首次加载时自动迁移 uumessage 旧语录数据（只读旧库，不删原数据） |
 
 ## 能力声明（capabilities）
 
-`send.text`、`send.image`、`send.hybrid`、`maisaka.context.append`、`chat.get_stream_by_group_id`、`chat.get_stream_by_user_id`。修改 manifest 中的能力声明后必须完整重启 MaiBot。
+`send.text`、`send.image`、`send.hybrid`、`maisaka.context.append`、`chat.get_stream_by_group_id`、`chat.get_stream_by_user_id`、`message.get_by_id`（/投稿语录 取被回复消息）。修改 manifest 中的能力声明后必须完整重启 MaiBot。
 
 ## 代码结构
 
@@ -157,6 +167,9 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 | `essential_jinqi.py` | 锦旗**内容规格**：参数分段、感谢语分列、日期写法、默认值补全（纯逻辑，零 PIL 依赖） |
 | `essential_render_jinqi.py` | 锦旗**渲染**：竖排版式、字号自适应、缺字回退（PIL） |
 | `essential_passive_eat.py` | "今天吃什么"被动触发、复读与防循环限流 |
+| `essential_almanac.py` | 今日宜忌**内容规格**：按日期种子抽取宜忌与幸运签（纯逻辑，零 PIL 依赖） |
+| `essential_render_almanac.py` | 今日宜忌**渲染**：黄历版式、方形朱印、缺字回退（PIL） |
+| `essential_quotes.py` | 群友语录存储（每群 JSON 索引 + 图片文件）与 uumessage 旧数据迁移 |
 
 加新功能时的惯例：**能脱离 `maibot_sdk` 的逻辑就单独成模块**，`plugin.py` 只负责装配与发送。
 这样领域逻辑能脱离宿主单独跑，改版式 / 改文案时不必启动整个机器人。
@@ -172,6 +185,7 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 
 | 版本 | 日期 | 更新内容 |
 |---|---|---|
+| **1.6.0** | 2026-10-26 | 新增**今日宜忌**（每日黄历图片，日期种子全群同结果，满运盖「百无禁忌」章）与**群友语录**（/投稿语录 + /群友语录，参考 pan-ice plugins-uumessage 并支持旧数据自动迁移）；新增 `[almanac]` / `[quotes]` 配置节与 `get_daily_almanac` / `random_quote` 工具；新增 `message.get_by_id` 能力声明（需完整重启） |
 | **1.5.0** | 2026-09-28 | 六个功能各自独立开关（`[report]` / `[good_morning]` / `[hitokoto]` / `[what_to_eat]` / `[jinqi]` / `[answer_book]`）；被动触发拆出 `passive_enabled` 独立开关；`/工具列表` 菜单随开关动态拼装 |
 | **1.4.0** | 2026-09-27 | 新增**锦旗图片生成**：`/锦旗` 命令 + `jinqi_banner` 工具，毛笔楷书竖排、感谢语自动分列、字号自适应；新增 `[jinqi]` 配置节 |
 | **1.3.2** | 2026-09-19 | 插件图标定稿（麦麦吉祥物红金版，四个功能 emoji 徽章）；插件更名为**麦麦小工具合集** |
@@ -191,6 +205,9 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
   [astrbot_plugin_essential](https://github.com/Soulter/astrbot_plugin_essential)（Soulter / FateTrial），MIT License
 - 今天吃什么的被动触发/复读/限流设计移植自
   [astrbot_plugin_what_to_eat](https://github.com/Sisyphbaous-DT-Project/astrbot_plugin_what_to_eat)（C₂₂H₂₅NO₆），MIT License
+- 群友语录玩法与投稿/随机回放设计参考自
+  [plugins-uumessage](https://github.com/pan-ice/plugins-uumessage)（pan-ice），MIT License
+  （v1.6.0 起合并入本插件重写实现，并支持从其旧库自动迁移数据）
 - 一言数据源：[v1.hitokoto.cn](https://v1.hitokoto.cn/)
 - 早晚安玩法灵感：[nonebot_plugin_morning](https://github.com/MinatoAquaCrews/nonebot_plugin_morning)
 - 喜报/悲报字体：[Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC)（Google，SIL Open Font License 1.1，

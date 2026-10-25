@@ -2,10 +2,12 @@
 
 功能：喜报/悲报图片生成、锦旗图片生成、一言（/一言，回复不计入消息）、
 答案之书（<问题> 翻看答案）、今天吃什么（命令 + 被动触发：关键词概率推荐/复读，
-移植自 astrbot_plugin_what_to_eat）、群早晚安作息记录。
-同时注册 4 个 LLM 工具（deferred 池，由麦麦经 tool_search 按需发现）。
+移植自 astrbot_plugin_what_to_eat）、群早晚安作息记录、今日宜忌（每日黄历图片，
+同一天全群同结果）、群友语录（/投稿语录 + /群友语录，玩法参考 pan-ice
+plugins-uumessage，MIT）。同时注册一批 LLM 工具（deferred 池，由麦麦经
+tool_search 按需发现）。
 
-**功能开关（v1.5.0 起）**：六个功能各有一个 `[<节>].enabled`，另有
+**功能开关（v1.5.0 起）**：各功能有 `[<节>].enabled`，另有
 `[what_to_eat].passive_enabled` 单独控制被动触发。命令 / 工具 / Hook 都是装饰器在
 类定义时注册的，运行时无法注销，所以开关统一走 `_feature_enabled()` 做**入口提前返回**：
 命令被吞掉不回复，工具返回提示文案，Hook 直接 return None。
@@ -18,6 +20,9 @@
     essential_jinqi.py        锦旗内容规格（参数解析、分列、日期）
     essential_render_jinqi.py 锦旗渲染
     essential_passive_eat.py  "今天吃什么"被动触发与限流
+    essential_almanac.py        今日宜忌内容规格（按日期种子抽取）
+    essential_render_almanac.py 今日宜忌渲染
+    essential_quotes.py         群友语录存储 + uumessage 旧数据迁移
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import datetime
+import hashlib
 import importlib.util
 import re
 import sys
@@ -80,7 +86,17 @@ PassiveResponder = _passive_eat.PassiveResponder
 FoodImageIndex = _passive_eat.FoodImageIndex
 sniff_image_ext = _passive_eat.sniff_image_ext
 
-SUPPORTED_CONFIG_VERSION = "1.5.0"  # 与 manifest version 保持同步
+_almanac = _load_sibling_module("essential_almanac")
+build_almanac_draw = _almanac.build_draw
+almanac_to_text = _almanac.to_text
+almanac_output_path = _almanac.output_path
+_render_almanac = _load_sibling_module("essential_render_almanac")
+render_almanac = _render_almanac.render_almanac
+
+_quotes_mod = _load_sibling_module("essential_quotes")
+QuoteStore = _quotes_mod.QuoteStore
+
+SUPPORTED_CONFIG_VERSION = "1.6.0"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -271,6 +287,53 @@ class AnswerBookSection(PluginConfigBase):
     )
 
 
+class AlmanacSection(PluginConfigBase):
+    """今日宜忌。"""
+
+    __ui_label__ = "今日宜忌"
+    __ui_icon__ = "calendar_month"
+    __ui_order__ = 7
+
+    enabled: bool = _ui_field(
+        "启用今日宜忌",
+        "启用「今日宜忌」命令与宜忌工具（同一天全群同结果，第二天自动换新）",
+        default=True,
+    )
+    custom_yi: list[str] = _ui_field(
+        "自定义宜词条",
+        "追加到宜抽取池的自定义词条（与内置词条一起参与每日抽取）",
+        default_factory=list,
+    )
+    custom_ji: list[str] = _ui_field(
+        "自定义忌词条",
+        "追加到忌抽取池的自定义词条（与内置词条一起参与每日抽取）",
+        default_factory=list,
+    )
+
+
+class QuotesSection(PluginConfigBase):
+    """群友语录（玩法参考 pan-ice plugins-uumessage，MIT）。"""
+
+    __ui_label__ = "群友语录"
+    __ui_icon__ = "forum"
+    __ui_order__ = 8
+
+    enabled: bool = _ui_field(
+        "启用群友语录", "启用 /投稿语录 与 /群友语录", default=True
+    )
+    max_quotes_per_group: int = _ui_field(
+        "每群语录上限",
+        "每个群最多保存的语录数量，超出自动清理最旧（含图片文件）",
+        default=500,
+        ge=1,
+    )
+    migrate_legacy: bool = _ui_field(
+        "迁移旧版数据",
+        "首次加载时自动迁移 uumessage 插件的语录数据（只读旧库并复制，不删除原数据）",
+        default=True,
+    )
+
+
 class EssentialConfig(PluginConfigBase):
     """插件完整配置。"""
 
@@ -281,6 +344,8 @@ class EssentialConfig(PluginConfigBase):
     what_to_eat: WhatToEatSection = Field(default_factory=WhatToEatSection)
     jinqi: JinqiSection = Field(default_factory=JinqiSection)
     answer_book: AnswerBookSection = Field(default_factory=AnswerBookSection)
+    almanac: AlmanacSection = Field(default_factory=AlmanacSection)
+    quotes: QuotesSection = Field(default_factory=QuotesSection)
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +366,7 @@ class EssentialPlugin(MaiBotPlugin):
         self._passive_responder: PassiveResponder | None = None
         self._food_images: FoodImageIndex | None = None
         self._good_morning_cd: dict[str, datetime.datetime] = {}
+        self._quotes: QuoteStore | None = None
 
     # -- 生命周期 -----------------------------------------------------------
 
@@ -318,17 +384,27 @@ class EssentialPlugin(MaiBotPlugin):
         await asyncio.to_thread(self._good_morning.load)
         await asyncio.to_thread(self._answer_book.load)
         self._init_what_to_eat_components()
+        self._quotes = QuoteStore(data_dir)
+        await self._migrate_legacy_quotes()
         try:
             self.ctx.paths.runtime_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
         self.ctx.logger.info(
-            "麦麦小工具合集已加载：食物 %d 项，早晚安记录 %d 个会话，答案之书 %d 条，食物图片 %d 种",
+            "麦麦小工具合集已加载：食物 %d 项，早晚安记录 %d 个会话，答案之书 %d 条，"
+            "食物图片 %d 种，语录 %d 群",
             len(self._food.items),
             len(self._good_morning.data),
             len(self._answer_book.answers),
             len(self._food_images.foods_with_images()),
+            len(self._quotes_images_groups()) if self._quotes else 0,
         )
+
+    def _quotes_images_groups(self) -> list[str]:
+        """统计已有语录图片的群号（仅用于加载日志展示）。"""
+        if self._quotes is None or not self._quotes.images_dir.is_dir():
+            return []
+        return [p.name for p in self._quotes.images_dir.iterdir() if p.is_dir()]
 
     def _init_what_to_eat_components(self) -> None:
         """按当前配置重建"今天吃什么"共享组件（on_load 与配置热更新共用）。"""
@@ -345,6 +421,53 @@ class EssentialPlugin(MaiBotPlugin):
         self._passive_responder = PassiveResponder(cfg.recommend_probability)
         if self._food_images is not None:
             self._food_images.reload()
+
+    @staticmethod
+    def _find_legacy_quotes_data() -> Path | None:
+        """定位 uumessage（群友语录原版）的数据目录。
+
+        插件中心建的目录名会把点换成下划线（github.pan-ice.plugins-uumessage →
+        github_pan-ice_plugins-uumessage），所以按「目录名含 uumessage 且带
+        data/quotes.db」模糊匹配，点号/下划线两种写法都覆盖。
+        """
+        plugins_dir = _PLUGIN_DIR.parent
+        candidates = [plugins_dir / "github.pan-ice.plugins-uumessage" / "data",
+                      plugins_dir / "github_pan-ice_plugins-uumessage" / "data"]
+        try:
+            candidates.extend(
+                p / "data" for p in plugins_dir.iterdir()
+                if p.is_dir() and "uumessage" in p.name.lower()
+            )
+        except OSError:
+            pass
+        for data_dir in candidates:
+            if (data_dir / "quotes.db").is_file():
+                return data_dir
+        return None
+
+    async def _migrate_legacy_quotes(self) -> None:
+        """把 uumessage 插件（群友语录原版）的数据迁进本插件数据目录（一次性）。"""
+        if self._quotes is None or not bool(
+            getattr(self.config.quotes, "migrate_legacy", True)
+        ):
+            return
+        legacy_data = self._find_legacy_quotes_data()
+        if legacy_data is None:
+            return
+        try:
+            report = await asyncio.to_thread(self._quotes.migrate_legacy_uumessage, legacy_data)
+        except Exception as e:  # noqa: BLE001 - 迁移失败不阻碍插件加载
+            self.ctx.logger.warning("群友语录旧数据迁移失败（可下次重载再试）: %s", e)
+            return
+        if report.get("skipped"):
+            self.ctx.logger.info("群友语录旧数据此前已迁移过，跳过")
+        elif report.get("error"):
+            self.ctx.logger.warning("群友语录旧数据迁移中止：%s", report["error"])
+        else:
+            self.ctx.logger.info(
+                "群友语录旧数据迁移完成：导入 %d 条（重复 %d，缺图 %d），原 uumessage 数据未改动",
+                report.get("imported", 0), report.get("duplicate", 0), report.get("missing_image", 0),
+            )
 
     async def on_unload(self) -> None:
         self.ctx.logger.info("麦麦小工具合集已卸载")
@@ -493,6 +616,11 @@ class EssentialPlugin(MaiBotPlugin):
                 )
         if self._feature_enabled("good_morning"):
             lines.append("早安 / 晚安 —— 记录作息并统计（麦麦可能会接话）")
+        if self._feature_enabled("almanac"):
+            lines.append("今日宜忌 —— 每日黄历图片（同一天全群同结果，第二天自动换新）")
+        if self._feature_enabled("quotes"):
+            lines.append("/投稿语录 —— 回复一张图片投稿到本群语录库")
+            lines.append("/群友语录 —— 随机一条本群投稿的语录图片")
 
         lines.append("/工具列表 —— 显示本菜单")
 
@@ -502,6 +630,8 @@ class EssentialPlugin(MaiBotPlugin):
                 ("推荐食物", self._feature_enabled("what_to_eat")),
                 ("喜报悲报", self._feature_enabled("report")),
                 ("锦旗", self._feature_enabled("jinqi")),
+                ("今日宜忌", self._feature_enabled("almanac")),
+                ("群友语录", self._feature_enabled("quotes")),
             ) if enabled
         ]
         if tool_labels:
@@ -760,6 +890,155 @@ class EssentialPlugin(MaiBotPlugin):
 
         return True, "作息已记录", False  # ★ 放行：麦麦自行决定是否再回复
 
+    @Command(
+        "daily_almanac",
+        description="今日宜忌（每日黄历）",
+        pattern=r"(?<!\S)/?(?:今日宜忌|今日黄历)(?:\s*\[[^\]]*\])*\s*$",
+    )
+    async def cmd_daily_almanac(self, **kwargs: Any):
+        """今日宜忌：按日期种子抽取，同一天全群同结果；渲染成黄历风图片发送。"""
+        if not self._feature_enabled("almanac"):
+            return False, "今日宜忌功能已在配置中关闭", True
+        stream_id = self._stream_id(kwargs)
+        day = datetime.datetime.now(TZ8).date()
+        draw_data = build_almanac_draw(
+            day,
+            custom_yi=list(getattr(self.config.almanac, "custom_yi", []) or []),
+            custom_ji=list(getattr(self.config.almanac, "custom_ji", []) or []),
+        )
+        out_path = almanac_output_path(self.ctx.paths.runtime_dir, day)
+        try:
+            await asyncio.to_thread(
+                render_almanac, out_path, draw_data,
+                _PLUGIN_DIR / "assets" / "MaShanZheng.ttf",
+                _PLUGIN_DIR / "assets" / "NotoSansSC.ttf",
+            )
+            image_b64 = base64.b64encode(out_path.read_bytes()).decode("ascii")
+        finally:
+            try:
+                out_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        sent = await self.ctx.send.image(image_b64, stream_id)
+        if not sent:
+            # 图片发送失败时降级为文字版，保证宜忌一定能看到
+            await self.ctx.send.text(almanac_to_text(draw_data), stream_id)
+        return True, "今日宜忌已发送", True
+
+    @Command(
+        "submit_quote",
+        description="投稿群友语录（回复一张图片使用）",
+        pattern=r"(?<!\S)/投稿语录(?:\s*\[[^\]]*\])*\s*$",
+    )
+    async def cmd_submit_quote(self, **kwargs: Any):
+        """投稿：回复一张含图片的消息，把图片收进本群语录库（按图片哈希去重）。"""
+        if not self._feature_enabled("quotes"):
+            return False, "群友语录功能已在配置中关闭", True
+        stream_id = self._stream_id(kwargs)
+        message = kwargs.get("message") or {}
+        info = message.get("message_info") or {}
+        group_id = str((info.get("group_info") or {}).get("group_id") or "")
+        if not group_id:
+            await self.ctx.send.text("群友语录仅支持群聊使用", stream_id)
+            return False, "非群聊消息", True
+
+        # 从当前消息里取 reply 段，拿到被回复消息 ID
+        raw_message = message.get("raw_message") or []
+        target_message_id = ""
+        for seg in raw_message:
+            if isinstance(seg, dict) and str(seg.get("type") or "") == "reply":
+                data = seg.get("data")
+                target_message_id = str(
+                    data.get("target_message_id", "") if isinstance(data, dict) else data
+                ).strip()
+                break
+        if not target_message_id:
+            await self.ctx.send.text("请先回复一张图片消息，再发送 /投稿语录", stream_id)
+            return False, "无回复目标", True
+
+        # 取被回复消息（含图片二进制）；取不到二进制时按 hash 回退宿主图片库
+        image_hash, image_bytes = await self._fetch_quote_image(target_message_id)
+        if not image_bytes:
+            await self.ctx.send.text("被回复的消息不存在、已过期或不含图片", stream_id)
+            return False, "取图失败", True
+        if not image_hash:
+            image_hash = hashlib.sha256(image_bytes).hexdigest()
+
+        ok, reason = await asyncio.to_thread(
+            self._quotes.add,
+            group_id, self._user_id(kwargs), self._nickname(kwargs),
+            image_hash, image_bytes,
+            message_id=target_message_id,
+            max_per_group=int(self.config.quotes.max_quotes_per_group),
+        )
+        if ok:
+            await self.ctx.send.text(
+                f"投稿成功！本群已有 {self._quotes.count(group_id)} 条语录。", stream_id,
+            )
+            return True, "投稿成功", True
+        if reason == "duplicate":
+            await self.ctx.send.text("这张图片已经投稿过了", stream_id)
+            return False, "重复投稿", True
+        await self.ctx.send.text("投稿失败了，请查看主进程日志排查。", stream_id)
+        return False, "投稿失败", True
+
+    async def _fetch_quote_image(self, target_message_id: str) -> tuple[str, bytes]:
+        """取被回复消息里的图片：优先 get_by_id 二进制，其次按 hash 探测宿主图片库。"""
+        try:
+            result = await self.ctx.message.get_by_id(
+                target_message_id, include_binary_data=True
+            )
+        except Exception as e:  # noqa: BLE001 - 能力未授权/旧宿主无此能力时走兜底
+            self.ctx.logger.warning("get_by_id 取被回复消息失败: %s", e)
+            result = None
+        if isinstance(result, dict) and "error" not in result:
+            for seg in result.get("raw_message") or []:
+                if not isinstance(seg, dict) or str(seg.get("type") or "") != "image":
+                    continue
+                image_hash = str(seg.get("hash") or "").strip().lower()
+                image_b64 = str(seg.get("binary_data_base64") or "").strip()
+                if image_b64:
+                    try:
+                        return image_hash, base64.b64decode(image_b64)
+                    except Exception:  # noqa: BLE001
+                        pass
+                if self._IMAGE_HASH_RE.match(image_hash):
+                    host_data_dir = Path(self.ctx.paths.data_dir).parent.parent
+                    data = await asyncio.to_thread(
+                        self._read_host_image_bytes, host_data_dir, "image", image_hash
+                    )
+                    if data:
+                        return image_hash, data
+        return "", b""
+
+    @Command(
+        "random_quote",
+        description="随机一条群友语录",
+        pattern=r"(?<!\S)/(?:群友语录|uu语录|群u语录)(?:\s*\[[^\]]*\])*\s*$",
+    )
+    async def cmd_random_quote(self, **kwargs: Any):
+        """随机抽一条本群语录图片发送（数据按群隔离）。"""
+        if not self._feature_enabled("quotes"):
+            return False, "群友语录功能已在配置中关闭", True
+        stream_id = self._stream_id(kwargs)
+        info = (kwargs.get("message") or {}).get("message_info") or {}
+        group_id = str((info.get("group_info") or {}).get("group_id") or "")
+        if not group_id:
+            await self.ctx.send.text("群友语录仅支持群聊使用", stream_id)
+            return False, "非群聊消息", True
+        quote = await asyncio.to_thread(self._quotes.random, group_id)
+        if quote is None:
+            await self.ctx.send.text(
+                "本群还没有语录。回复一张图片消息发送 /投稿语录，收下第一张吧。", stream_id,
+            )
+            return False, "语录库为空", True
+        image_b64 = await asyncio.to_thread(self._quotes.read_image_b64, group_id, quote)
+        if not image_b64:
+            await self.ctx.send.text("语录图片读不出来了，换一张试试吧。", stream_id)
+            return False, "图片读取失败", True
+        await self.ctx.send.image(image_b64, stream_id)
+        return True, "语录已发送", True
+
     # -- LLM 工具组件（deferred 池，麦麦经 tool_search 发现） -----------------
 
     @Tool(
@@ -881,6 +1160,58 @@ class EssentialPlugin(MaiBotPlugin):
         except Exception as e:  # noqa: BLE001
             return {"content": f"锦旗生成失败: {e}"}
         return {"content": message if ok else f"锦旗未生成：{message}"}
+
+    @Tool(
+        "get_daily_almanac",
+        brief_description="获取今日宜忌（每日黄历）",
+        detailed_description=(
+            "获取今天的宜忌清单与幸运签（吉利方位/幸运数字/幸运物/运势星级），"
+            "返回文字版；同一天结果固定，全群一致，第二天自动换新。"
+            "仅当用户提到今日宜忌、黄历、今天适合做什么、运气如何等话题时调用，不要主动滥用。"
+        ),
+        parameters=None,
+    )
+    async def tool_get_daily_almanac(self, **kwargs: Any):
+        if not self._feature_enabled("almanac"):
+            return {"content": "今日宜忌功能当前已关闭，请勿再调用此工具。"}
+        day = datetime.datetime.now(TZ8).date()
+        draw_data = build_almanac_draw(
+            day,
+            custom_yi=list(getattr(self.config.almanac, "custom_yi", []) or []),
+            custom_ji=list(getattr(self.config.almanac, "custom_ji", []) or []),
+        )
+        return {"content": almanac_to_text(draw_data)}
+
+    @Tool(
+        "random_quote",
+        brief_description="随机发一条本群群友语录图片",
+        detailed_description=(
+            "从当前群的语录库随机抽一张投稿图片发送到当前会话。"
+            "仅当用户明确想看群友语录、投稿的图时调用；私聊或本群还没有语录时返回提示。"
+        ),
+        parameters=None,
+    )
+    async def tool_random_quote(self, **kwargs: Any):
+        if not self._feature_enabled("quotes"):
+            return {"content": "群友语录功能当前已关闭，请勿再调用此工具。"}
+        stream_id = self._stream_id(kwargs)
+        if not stream_id:
+            return {"content": "当前调用没有会话上下文，无法发送语录。"}
+        message = kwargs.get("message") or {}
+        group_id = str((message.get("message_info") or {}).get("group_info", {})
+                       .get("group_id") or "")
+        if not group_id:
+            return {"content": "群友语录仅支持群聊，私聊不可用。"}
+        quote = await asyncio.to_thread(self._quotes.random, group_id)
+        if quote is None:
+            return {"content": "本群还没有语录，可以先回复图片消息发送 /投稿语录 投稿。"}
+        image_b64 = await asyncio.to_thread(self._quotes.read_image_b64, group_id, quote)
+        if not image_b64:
+            return {"content": "语录图片读取失败，未发送。"}
+        sent = await self.ctx.send.image(image_b64, stream_id)
+        if not sent:
+            return {"content": "语录图片发送失败，请查看主进程日志。"}
+        return {"content": "已发送一条群友语录图片。"}
 
     # -- 被动触发（今天吃什么，移植自 astrbot_plugin_what_to_eat） -----------
 
