@@ -96,7 +96,7 @@ render_almanac = _render_almanac.render_almanac
 _quotes_mod = _load_sibling_module("essential_quotes")
 QuoteStore = _quotes_mod.QuoteStore
 
-SUPPORTED_CONFIG_VERSION = "1.6.3"  # 与 manifest version 保持同步
+SUPPORTED_CONFIG_VERSION = "1.6.4"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -979,6 +979,11 @@ class EssentialPlugin(MaiBotPlugin):
         if reason == "duplicate":
             await self.ctx.send.text("这张图片已经投稿过了", stream_id)
             return False, "重复投稿", True
+        if reason == "invalid_group_id":
+            # 群号没过安全白名单（非数字/字母/下划线/短横）：不落盘、不建目录
+            self.ctx.logger.warning("群号未通过安全校验，拒绝投稿：%r", group_id)
+            await self.ctx.send.text("本群群号格式异常，语录功能暂不可用。", stream_id)
+            return False, "群号非法", True
         await self.ctx.send.text("投稿失败了，请查看主进程日志排查。", stream_id)
         return False, "投稿失败", True
 
@@ -1012,7 +1017,7 @@ class EssentialPlugin(MaiBotPlugin):
         return "", b""
 
     @Command(
-        "random_quote",
+        "random_group_quote",
         description="随机一条群友语录",
         pattern=r"(?<!\S)/(?:群友语录|uu语录|群u语录)(?:\s*\[[^\]]*\])*\s*$",
     )

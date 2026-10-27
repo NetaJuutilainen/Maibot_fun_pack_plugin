@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/icon.png" width="128" alt="麦麦小工具合集图标"/>
+  <img src="https://raw.githubusercontent.com/NetaJuutilainen/Maibot_fun_pack_plugin/main/assets/icon.png" width="128" alt="麦麦小工具合集图标"/>
   <h1>麦麦小工具合集</h1>
   <p><b>麦爹的娱乐功能合集</b> —— 喜报 / 悲报 · 锦旗 · 一言 · 答案之书 · 今天吃什么 · 早晚安 · 今日宜忌 · 群友语录</p>
 </div>
@@ -15,7 +15,7 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 
 | 喜报 | 悲报 |
 |:---:|:---:|
-| ![喜报示例](docs/images/congrats.jpg) | ![悲报示例](docs/images/uncongrats.jpg) |
+| ![喜报示例](https://raw.githubusercontent.com/NetaJuutilainen/Maibot_fun_pack_plugin/main/docs/images/congrats.jpg) | ![悲报示例](https://raw.githubusercontent.com/NetaJuutilainen/Maibot_fun_pack_plugin/main/docs/images/uncongrats.jpg) |
 | `/喜报 麦麦小工具合集 v1.4.0 正式上线，新增锦旗图片生成！` | `/悲报 群主跑路，摸鱼大业无人主持` |
 
 **锦旗** —— 竖排右起：右侧赠予对象 → 中间感谢语（自动分列）→ 左侧落款与日期
@@ -24,12 +24,12 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 /锦旗 助人为乐 情暖人心 | 赠：麦麦 | 全体群友
 ```
 
-![锦旗示例](docs/images/jinqi.jpg)
+![锦旗示例](https://raw.githubusercontent.com/NetaJuutilainen/Maibot_fun_pack_plugin/main/docs/images/jinqi.jpg)
 
 **今日宜忌** —— 每日黄历：宜/忌清单、十二时辰吉凶、幸运签，附**真实的农历与冲煞**；
 同一天全群同结果，第二天自动换新，运势满星还会盖一枚「百无禁忌」章
 
-![今日宜忌示例](docs/images/almanac.jpg)
+![今日宜忌示例](https://raw.githubusercontent.com/NetaJuutilainen/Maibot_fun_pack_plugin/main/docs/images/almanac.jpg)
 
 <sub>以上样张均由插件自身渲染生成，未做手工修图。</sub>
 
@@ -194,6 +194,10 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 
 | 版本 | 日期 | 更新内容 |
 |---|---|---|
+| **1.6.4** | 2026-10-27 | **安全加固**（市场审核意见）：群友语录的 `group_id` 增加白名单校验与路径 containment 检查，索引 / 图片写入 / 随机读取 / 清理 / 旧数据迁移全部收口；**修复** `/群友语录` 命令因与 LLM 工具同名 `random_quote` 被宿主注册表覆盖而失效（命令组件改名 `random_group_quote`，命令文本与工具名不变） |
+| **1.6.3** | 2026-10-26 | 修复徽章 emoji 居中不彻底：墨迹探测图逐枚重置，顶部锦旗徽章真正居中 |
+| **1.6.2** | 2026-10-26 | 修复插件图标顶部「锦旗」徽章的 emoji 未对齐：按实际墨迹包围盒居中，8 枚徽章全部重排 |
+| **1.6.1** | 2026-10-26 | 插件图标更新：功能徽章从 4 枚扩到 8 枚（新增锦旗 🎖️、今日宜忌 📜、群友语录 📸、一言 💬）；README 效果预览新增「今日宜忌」样张 |
 | **1.6.0** | 2026-10-26 | 新增**今日宜忌**（每日黄历图片，日期种子全群同结果，满运盖「百无禁忌」章）与**群友语录**（/投稿语录 + /群友语录，参考 pan-ice plugins-uumessage 并支持旧数据自动迁移）；新增 `[almanac]` / `[quotes]` 配置节与 `get_daily_almanac` / `random_quote` 工具；新增 `message.get_by_id` 能力声明（需完整重启） |
 | **1.5.0** | 2026-09-28 | 六个功能各自独立开关（`[report]` / `[good_morning]` / `[hitokoto]` / `[what_to_eat]` / `[jinqi]` / `[answer_book]`）；被动触发拆出 `passive_enabled` 独立开关；`/工具列表` 菜单随开关动态拼装 |
 | **1.4.0** | 2026-09-27 | 新增**锦旗图片生成**：`/锦旗` 命令 + `jinqi_banner` 工具，毛笔楷书竖排、感谢语自动分列、字号自适应；新增 `[jinqi]` 配置节 |

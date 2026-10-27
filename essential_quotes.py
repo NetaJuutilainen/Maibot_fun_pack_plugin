@@ -24,12 +24,37 @@ import base64
 import hashlib
 import json
 import random
+import re
 import sqlite3
 import time
 from pathlib import Path
 
 INDEX_VERSION = 1
 MIGRATION_MARKER = "quotes_migration.json"
+# 群号白名单：平台群号一律为数字/字母/下划线/短横，最长 64 字符。
+# 任何不在白名单内的字符（尤其是 `.` `/` `\\` 与空字符）都拒绝入库，
+# 从源头堵死「把用户输入直接当文件名」导致的路径穿越（插件中心评审阻断项）。
+_SAFE_GROUP_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+# 图片文件名白名单（索引 JSON 里的 file 字段同样视为外部输入，可能被手改）
+_SAFE_FILE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+# 图片文件名由 sha256 派生，只接受 64 位小写十六进制；不合规一律按内容重算
+_SAFE_IMAGE_HASH = re.compile(r"^[a-f0-9]{64}$")
+
+
+def _safe_group_id(group_id: object) -> str | None:
+    """把外部传入的 group_id 规整成可安全当目录名的字符串；非法返回 None。"""
+    text = str(group_id if group_id is not None else "").strip()
+    return text if _SAFE_GROUP_ID.fullmatch(text) else None
+
+
+def _contained(base: Path, target: Path) -> bool:
+    """target 解析后是否仍位于 base 之内（二次兜底，防白名单被绕过）。"""
+    try:
+        base_r = base.resolve()
+        target_r = target.resolve()
+    except (OSError, RuntimeError):
+        return False
+    return target_r == base_r or base_r in target_r.parents
 
 
 class QuoteStore:
@@ -43,27 +68,48 @@ class QuoteStore:
     # -- 索引读写 -----------------------------------------------------------
 
     def _index_path(self, group_id: str) -> Path:
+        """索引文件路径；group_id 必须先过 _safe_group_id 校验。"""
         return self.data_dir / f"quotes_{group_id}.json"
 
+    def _image_path(self, group_id: object, file_name: object) -> Path | None:
+        """拼图片文件路径并做双重校验：白名单 + resolve 后仍在 images_dir 内。
+
+        索引 JSON 里的 file 字段同样按外部输入对待（文件可能被手工改过），
+        任何不合规的名字一律返回 None，调用方按「图片丢了」处理。
+        """
+        gid = _safe_group_id(group_id)
+        name = str(file_name if file_name is not None else "").strip()
+        if gid is None or not _SAFE_FILE_NAME.fullmatch(name) or name in (".", ".."):
+            return None
+        target = self.images_dir / gid / name
+        return target if _contained(self.images_dir, target) else None
+
     def _load(self, group_id: str) -> list[dict]:
-        if group_id not in self._cache:
-            path = self._index_path(group_id)
+        gid = _safe_group_id(group_id)
+        if gid is None:
+            # 非法群号当作空库：不读盘、不落盘、不进缓存
+            return []
+        if gid not in self._cache:
+            path = self._index_path(gid)
             if path.exists():
                 try:
                     data = json.loads(path.read_text(encoding="utf-8"))
                     quotes = data.get("quotes", []) if isinstance(data, dict) else []
-                    self._cache[group_id] = [q for q in quotes if isinstance(q, dict)]
+                    self._cache[gid] = [q for q in quotes if isinstance(q, dict)]
                 except (json.JSONDecodeError, OSError):
-                    self._cache[group_id] = []
+                    self._cache[gid] = []
             else:
-                self._cache[group_id] = []
-        return self._cache[group_id]
+                self._cache[gid] = []
+        return self._cache[gid]
 
     def _save(self, group_id: str) -> None:
+        gid = _safe_group_id(group_id)
+        if gid is None:
+            return
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        self._index_path(group_id).write_text(
+        self._index_path(gid).write_text(
             json.dumps(
-                {"version": INDEX_VERSION, "quotes": self._cache.get(group_id, [])},
+                {"version": INDEX_VERSION, "quotes": self._cache.get(gid, [])},
                 ensure_ascii=False, indent=2,
             ),
             encoding="utf-8",
@@ -86,19 +132,32 @@ class QuoteStore:
         created_at: float | None = None,
         max_per_group: int = 500,
     ) -> tuple[bool, str]:
-        """投稿一条语录。返回 (是否成功, 说明)；同一群内同一图片视为重复。"""
-        quotes = self._load(group_id)
-        if any(q.get("image_hash") == image_hash for q in quotes):
+        """投稿一条语录。返回 (是否成功, 说明)；同一群内同一图片视为重复。
+
+        group_id 与 image_hash 都会先规范化：群号不过白名单直接判失败（不会
+        产生任何文件），哈希不合规则按图片内容重算 —— 调用方传什么都没法让
+        落盘路径跑到数据目录之外。
+        """
+        gid = _safe_group_id(group_id)
+        if gid is None:
+            return False, "invalid_group_id"
+        digest = str(image_hash or "").strip().lower()
+        if not _SAFE_IMAGE_HASH.fullmatch(digest):
+            digest = hashlib.sha256(image_bytes).hexdigest()
+        quotes = self._load(gid)
+        if any(q.get("image_hash") == digest for q in quotes):
             return False, "duplicate"
 
-        group_dir = self.images_dir / group_id
+        group_dir = self.images_dir / gid
+        image_path = group_dir / f"{digest}.png"
+        if not _contained(self.images_dir, image_path):
+            return False, "invalid_image_path"
         group_dir.mkdir(parents=True, exist_ok=True)
-        image_path = group_dir / f"{image_hash}.png"
         if not image_path.exists():
             image_path.write_bytes(image_bytes)
 
         quotes.append({
-            "image_hash": image_hash,
+            "image_hash": digest,
             "file": image_path.name,
             "user_id": str(user_id),
             "user_nickname": str(nickname or ""),
@@ -111,27 +170,40 @@ class QuoteStore:
             stale = quotes[:excess]
             del quotes[:excess]
             for old in stale:
-                old_path = self.images_dir / group_id / str(old.get("file") or "")
+                # 路径再校验一次：索引里的 file 字段可能是被手改过的脏数据，
+                # 校验不过就只从索引里剔除、绝不 unlink 数据目录外的文件
+                old_path = self._image_path(gid, old.get("file"))
+                if old_path is None:
+                    continue
                 try:
                     old_path.unlink(missing_ok=True)
                 except OSError:
                     pass
-        self._save(group_id)
+        self._save(gid)
         return True, "ok"
 
     def random(self, group_id: str) -> dict | None:
         """随机抽一条；索引里图片文件已丢失的条目顺手清掉。"""
-        quotes = self._load(group_id)
-        alive = [q for q in quotes if (self.images_dir / group_id / str(q.get("file") or "")).is_file()]
+        gid = _safe_group_id(group_id)
+        if gid is None:
+            return None
+        quotes = self._load(gid)
+        alive: list[dict] = []
+        for q in quotes:
+            path = self._image_path(gid, q.get("file"))
+            if path is not None and path.is_file():
+                alive.append(q)
         if len(alive) != len(quotes):
-            self._cache[group_id] = alive
-            self._save(group_id)
+            self._cache[gid] = alive
+            self._save(gid)
         if not alive:
             return None
         return random.choice(alive)
 
     def read_image_b64(self, group_id: str, quote: dict) -> str | None:
-        path = self.images_dir / group_id / str(quote.get("file") or "")
+        path = self._image_path(group_id, (quote or {}).get("file"))
+        if path is None:
+            return None
         try:
             return base64.b64encode(path.read_bytes()).decode("ascii")
         except OSError:
@@ -149,7 +221,7 @@ class QuoteStore:
         db_path = legacy_data_dir / "quotes.db"
         report: dict = {
             "skipped": False, "imported": 0, "duplicate": 0,
-            "missing_image": 0, "source": str(db_path),
+            "missing_image": 0, "skipped_groups": 0, "source": str(db_path),
         }
         marker = self.data_dir / MIGRATION_MARKER
         if marker.exists():
@@ -177,9 +249,14 @@ class QuoteStore:
 
         legacy_images = legacy_data_dir / "images"
         for row in rows:
-            group_id = str(row["group_id"])
+            # 旧库里的 group_id 同样是外部数据，先过白名单再用（迁移路径与投稿
+            # 路径同源，不校验一样能穿越）。不合规的记录计入 skipped_groups。
+            group_id = _safe_group_id(row["group_id"])
             image_hash = str(row["image_hash"] or "").strip()
-            if not group_id or not image_hash:
+            if group_id is None:
+                report["skipped_groups"] = report.get("skipped_groups", 0) + 1
+                continue
+            if not image_hash:
                 report["missing_image"] += 1
                 continue
             # 旧库里的 image_path 是入库机器上的绝对路径，优先用，其次按
