@@ -12,11 +12,14 @@ tool_search 按需发现）。
 类定义时注册的，运行时无法注销，所以开关统一走 `_feature_enabled()` 做**入口提前返回**：
 命令被吞掉不回复，工具返回提示文案，Hook 直接 return None。
 
-**群号黑白名单（v1.6.4 起）**：`[group_filter].allow_groups` / `block_groups` 是
-**群号级**的全局门控 —— 所有命令 / 工具 / 被动触发都先过 `_group_allowed()`：
-白名单留空 = 不启用白名单；黑名单留空 = 不拦任何群（两者都空即**全局通过**）；
-命中黑名单一律拦（优先级高于白名单）；私聊（拿不到群号）不受名单限制。
-名单只做「入口提前返回」，不会注销已注册的组件。
+**群号名单（v1.6.4 起）**：`[group_filter]` 是**群号级**的全局门控 —— 所有命令 /
+工具 / 被动触发都先过 `_group_allowed()`。模式二选一、共用同一份名单：
+
+    mode = "block"（默认，黑名单）  名单里的群禁用整个插件，其余群正常
+    mode = "allow"（白名单）        只有名单里的群能用，其余群禁用
+    groups                         群号列表；留空 = 不拦任何群（全局通过）
+
+私聊（拿不到群号）不受名单限制。名单只做「入口提前返回」，不会注销已注册的组件。
 
 模块划分（同目录平铺，互不 import，只传数据）：
     plugin.py                 组件装配：命令 / 工具 / Hook / 配置模型
@@ -107,9 +110,9 @@ SUPPORTED_CONFIG_VERSION = "1.6.4"  # 与 manifest version 保持同步
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
 
-# 群号黑白名单命中时的统一表现：命令静默吞掉（同功能开关），工具回一句让麦麦别反复调
-GROUP_BLOCK_COMMAND_REASON = "本群已被群号名单禁用"
-GROUP_BLOCK_TOOL_HINT = "本群已被群号名单禁用本插件，请勿再调用此工具。"
+# 群号名单拦截时的统一表现：命令静默吞掉（同功能开关），工具回一句让麦麦别反复调
+GROUP_BLOCK_COMMAND_REASON = "本群未通过群号名单校验"
+GROUP_BLOCK_TOOL_HINT = "本群未通过群号名单校验，请勿再调用本插件工具。"
 
 
 # ---------------------------------------------------------------------------
@@ -345,20 +348,20 @@ class QuotesSection(PluginConfigBase):
 
 
 class GroupFilterSection(PluginConfigBase):
-    """群号黑白名单（全局门控，v1.6.4 起）。"""
+    """群号名单（全局门控，v1.6.4 起）：一个模式 + 一份名单。"""
 
-    __ui_label__ = "群号黑白名单"
+    __ui_label__ = "群号名单"
     __ui_icon__ = "block"
     __ui_order__ = 9
 
-    allow_groups: list[str] = _ui_field(
-        "群号白名单",
-        "只在这些群生效（一个群号一行），留空＝不启用白名单、所有群都可以用",
-        default_factory=list,
+    mode: Literal["block", "allow"] = _ui_field(
+        "名单模式",
+        "block＝黑名单（名单里的群禁用整个插件）；allow＝白名单（只有名单里的群能用）",
+        default="block",
     )
-    block_groups: list[str] = _ui_field(
-        "群号黑名单",
-        "这些群禁用整个插件（一个群号一行），留空＝不拦任何群（全局通过）；优先级高于白名单",
+    groups: list[str] = _ui_field(
+        "群号名单",
+        "按上面的模式生效，一个群号一行。留空＝不拦任何群（全局通过）；私聊不受影响",
         default_factory=list,
     )
 
@@ -554,12 +557,12 @@ class EssentialPlugin(MaiBotPlugin):
             return ""
 
     def _is_group_allowed(self, group_id: str) -> bool:
-        """群号黑白名单判定。
+        """群号名单判定（模式由 `[group_filter].mode` 决定，两模式共用同一份名单）。
 
         · 私聊 / 拿不到群号（空串）⇒ 一律放行，名单只管群聊；
-        · 命中黑名单 ⇒ 拒绝（**优先级高于白名单**）；
-        · 白名单非空 ⇒ 只放行名单内的群；
-        · 白名单留空 ⇒ 不启用白名单（所有群放行，即「全局通过」）。
+        · 名单留空 ⇒ 不拦任何群（两种模式都等同于「全局通过」）；
+        · mode = block（黑名单）⇒ 名单内的群拒绝，其余群放行；
+        · mode = allow（白名单）⇒ 名单内的群放行，其余群拒绝。
         """
         gid = str(group_id or "").strip()
         if not gid:
@@ -567,17 +570,15 @@ class EssentialPlugin(MaiBotPlugin):
         node = getattr(self.config, "group_filter", None)
         if node is None:
             return True
-        blocked = {
-            str(x).strip() for x in (getattr(node, "block_groups", None) or []) if str(x).strip()
+        listed = {
+            str(x).strip() for x in (getattr(node, "groups", None) or []) if str(x).strip()
         }
-        allowed = {
-            str(x).strip() for x in (getattr(node, "allow_groups", None) or []) if str(x).strip()
-        }
-        if gid in blocked:
-            return False
-        if allowed:
-            return gid in allowed
-        return True
+        if not listed:
+            return True
+        mode = str(getattr(node, "mode", "block") or "block").strip().lower()
+        if mode == "allow":
+            return gid in listed
+        return gid not in listed
 
     def _group_allowed(self, kwargs: dict) -> bool:
         """命令 / 工具 / Hook 的群号门控（供入口提前返回使用）。"""
