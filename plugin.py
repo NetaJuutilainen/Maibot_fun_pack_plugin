@@ -12,6 +12,12 @@ tool_search 按需发现）。
 类定义时注册的，运行时无法注销，所以开关统一走 `_feature_enabled()` 做**入口提前返回**：
 命令被吞掉不回复，工具返回提示文案，Hook 直接 return None。
 
+**群号黑白名单（v1.6.4 起）**：`[group_filter].allow_groups` / `block_groups` 是
+**群号级**的全局门控 —— 所有命令 / 工具 / 被动触发都先过 `_group_allowed()`：
+白名单留空 = 不启用白名单；黑名单留空 = 不拦任何群（两者都空即**全局通过**）；
+命中黑名单一律拦（优先级高于白名单）；私聊（拿不到群号）不受名单限制。
+名单只做「入口提前返回」，不会注销已注册的组件。
+
 模块划分（同目录平铺，互不 import，只传数据）：
     plugin.py                 组件装配：命令 / 工具 / Hook / 配置模型
     essential_services.py     外部 API 客户端
@@ -100,6 +106,10 @@ SUPPORTED_CONFIG_VERSION = "1.6.4"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
+
+# 群号黑白名单命中时的统一表现：命令静默吞掉（同功能开关），工具回一句让麦麦别反复调
+GROUP_BLOCK_COMMAND_REASON = "本群已被群号名单禁用"
+GROUP_BLOCK_TOOL_HINT = "本群已被群号名单禁用本插件，请勿再调用此工具。"
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +344,25 @@ class QuotesSection(PluginConfigBase):
     )
 
 
+class GroupFilterSection(PluginConfigBase):
+    """群号黑白名单（全局门控，v1.6.4 起）。"""
+
+    __ui_label__ = "群号黑白名单"
+    __ui_icon__ = "block"
+    __ui_order__ = 9
+
+    allow_groups: list[str] = _ui_field(
+        "群号白名单",
+        "只在这些群生效（一个群号一行），留空＝不启用白名单、所有群都可以用",
+        default_factory=list,
+    )
+    block_groups: list[str] = _ui_field(
+        "群号黑名单",
+        "这些群禁用整个插件（一个群号一行），留空＝不拦任何群（全局通过）；优先级高于白名单",
+        default_factory=list,
+    )
+
+
 class EssentialConfig(PluginConfigBase):
     """插件完整配置。"""
 
@@ -346,6 +375,7 @@ class EssentialConfig(PluginConfigBase):
     answer_book: AnswerBookSection = Field(default_factory=AnswerBookSection)
     almanac: AlmanacSection = Field(default_factory=AlmanacSection)
     quotes: QuotesSection = Field(default_factory=QuotesSection)
+    group_filter: GroupFilterSection = Field(default_factory=GroupFilterSection)
 
 
 # ---------------------------------------------------------------------------
@@ -514,6 +544,45 @@ class EssentialPlugin(MaiBotPlugin):
             return True
         return bool(getattr(node, "enabled", True))
 
+    @staticmethod
+    def _group_id_of(kwargs: dict) -> str:
+        """从命令 / 工具 / Hook 的 kwargs 里取群号（取不到返回空串）。"""
+        try:
+            info = (kwargs.get("message") or {}).get("message_info") or {}
+            return str((info.get("group_info") or {}).get("group_id") or "").strip()
+        except Exception:  # noqa: BLE001 - 畸形消息体一律按「没有群号」处理
+            return ""
+
+    def _is_group_allowed(self, group_id: str) -> bool:
+        """群号黑白名单判定。
+
+        · 私聊 / 拿不到群号（空串）⇒ 一律放行，名单只管群聊；
+        · 命中黑名单 ⇒ 拒绝（**优先级高于白名单**）；
+        · 白名单非空 ⇒ 只放行名单内的群；
+        · 白名单留空 ⇒ 不启用白名单（所有群放行，即「全局通过」）。
+        """
+        gid = str(group_id or "").strip()
+        if not gid:
+            return True
+        node = getattr(self.config, "group_filter", None)
+        if node is None:
+            return True
+        blocked = {
+            str(x).strip() for x in (getattr(node, "block_groups", None) or []) if str(x).strip()
+        }
+        allowed = {
+            str(x).strip() for x in (getattr(node, "allow_groups", None) or []) if str(x).strip()
+        }
+        if gid in blocked:
+            return False
+        if allowed:
+            return gid in allowed
+        return True
+
+    def _group_allowed(self, kwargs: dict) -> bool:
+        """命令 / 工具 / Hook 的群号门控（供入口提前返回使用）。"""
+        return self._is_group_allowed(self._group_id_of(kwargs))
+
     async def _append_context(self, stream_id: str, note: str) -> None:
         """向麦麦会话追加一条插件上下文（失败只记日志，不影响命令结果）。"""
         if not stream_id:
@@ -651,12 +720,16 @@ class EssentialPlugin(MaiBotPlugin):
 
     @Command("tool_list", description="查看本插件全部指令", pattern=r"(?<!\S)/工具列表(?:\s*\[[^\]]*\])*\s*$")
     async def cmd_tool_list(self, **kwargs: Any):
+        if not self._group_allowed(kwargs):
+            return False, GROUP_BLOCK_COMMAND_REASON, True
         stream_id = self._stream_id(kwargs)
         await self.ctx.send.text(self._build_menu_text(), stream_id)
         return True, "已发送指令列表", True
 
     @Command("happy_report", description="喜报图片生成", pattern=r"(?<!\S)/喜报\s+(?P<text>[\s\S]+?)\s*(?:\[[^\]]*\]\s*)*$")
     async def cmd_happy_report(self, **kwargs: Any):
+        if not self._group_allowed(kwargs):
+            return False, GROUP_BLOCK_COMMAND_REASON, True
         if not self._feature_enabled("report"):
             return False, "喜报功能已在配置中关闭", True
         text = strip_bracket_placeholders(
@@ -671,6 +744,8 @@ class EssentialPlugin(MaiBotPlugin):
 
     @Command("sad_report", description="悲报图片生成", pattern=r"(?<!\S)/悲报\s+(?P<text>[\s\S]+?)\s*(?:\[[^\]]*\]\s*)*$")
     async def cmd_sad_report(self, **kwargs: Any):
+        if not self._group_allowed(kwargs):
+            return False, GROUP_BLOCK_COMMAND_REASON, True
         if not self._feature_enabled("report"):
             return False, "悲报功能已在配置中关闭", True
         text = strip_bracket_placeholders(
@@ -689,6 +764,8 @@ class EssentialPlugin(MaiBotPlugin):
         pattern=r"(?<!\S)/锦旗(?:\s+(?P<text>[\s\S]+?))?\s*(?:\[[^\]]*\]\s*)*$",
     )
     async def cmd_jinqi(self, **kwargs: Any):
+        if not self._group_allowed(kwargs):
+            return False, GROUP_BLOCK_COMMAND_REASON, True
         if not self._feature_enabled("jinqi"):
             return False, "锦旗功能已在配置中关闭", True
         text = strip_bracket_placeholders(
@@ -712,6 +789,8 @@ class EssentialPlugin(MaiBotPlugin):
     )
     async def cmd_answer_book(self, **kwargs: Any):
         """经典答案之书玩法：从本地词条库随机抽一条，引用回复。"""
+        if not self._group_allowed(kwargs):
+            return False, GROUP_BLOCK_COMMAND_REASON, True
         if not self._feature_enabled("answer_book"):
             return False, "答案之书已在配置中关闭", True
         question = str((kwargs.get("matched_groups") or {}).get("question") or "").strip()
@@ -742,6 +821,8 @@ class EssentialPlugin(MaiBotPlugin):
     @Command("hitokoto", description="来一条一言", pattern=r"(?<!\S)/?一言(?:\s+(?P<extra>[\s\S]+?))?\s*(?:\[[^\]]*\]\s*)*$")
     async def cmd_hitokoto(self, **kwargs: Any):
         """一言：随取随看，命令回复不入库、不同步进麦麦上下文（不计入消息）。"""
+        if not self._group_allowed(kwargs):
+            return False, GROUP_BLOCK_COMMAND_REASON, True
         if not self._feature_enabled("hitokoto"):
             return False, "一言功能已在配置中关闭", True
         stream_id = self._stream_id(kwargs)
@@ -766,6 +847,8 @@ class EssentialPlugin(MaiBotPlugin):
         pattern=r"(?<!\S)/今天吃什么(?:\s+(?P<action>添加|删除)(?:\s+(?P<items>[\s\S]+?))?)?(?:\s*\[[^\]]*\])*\s*$",
     )
     async def cmd_what_to_eat(self, **kwargs: Any):
+        if not self._group_allowed(kwargs):
+            return False, GROUP_BLOCK_COMMAND_REASON, True
         if not self._feature_enabled("what_to_eat"):
             return False, "今天吃什么功能已在配置中关闭", True
         groups = kwargs.get("matched_groups") or {}
@@ -829,6 +912,8 @@ class EssentialPlugin(MaiBotPlugin):
         pattern=r"(?<!\S)/?(?P<kind>早安|晚安)[呀啊喵哦咯啦哟唷~～，,。！!。\s]*$",
     )
     async def cmd_good_morning(self, **kwargs: Any):
+        if not self._group_allowed(kwargs):
+            return False, GROUP_BLOCK_COMMAND_REASON, True
         if not self._feature_enabled("good_morning"):
             return False, "早晚安功能已在配置中关闭", True
         kind = str((kwargs.get("matched_groups") or {}).get("kind") or "")
@@ -897,6 +982,8 @@ class EssentialPlugin(MaiBotPlugin):
     )
     async def cmd_daily_almanac(self, **kwargs: Any):
         """今日宜忌：按日期种子抽取，同一天全群同结果；渲染成黄历风图片发送。"""
+        if not self._group_allowed(kwargs):
+            return False, GROUP_BLOCK_COMMAND_REASON, True
         if not self._feature_enabled("almanac"):
             return False, "今日宜忌功能已在配置中关闭", True
         stream_id = self._stream_id(kwargs)
@@ -932,6 +1019,8 @@ class EssentialPlugin(MaiBotPlugin):
     )
     async def cmd_submit_quote(self, **kwargs: Any):
         """投稿：回复一张含图片的消息，把图片收进本群语录库（按图片哈希去重）。"""
+        if not self._group_allowed(kwargs):
+            return False, GROUP_BLOCK_COMMAND_REASON, True
         if not self._feature_enabled("quotes"):
             return False, "群友语录功能已在配置中关闭", True
         stream_id = self._stream_id(kwargs)
@@ -1023,6 +1112,8 @@ class EssentialPlugin(MaiBotPlugin):
     )
     async def cmd_random_quote(self, **kwargs: Any):
         """随机抽一条本群语录图片发送（数据按群隔离）。"""
+        if not self._group_allowed(kwargs):
+            return False, GROUP_BLOCK_COMMAND_REASON, True
         if not self._feature_enabled("quotes"):
             return False, "群友语录功能已在配置中关闭", True
         stream_id = self._stream_id(kwargs)
@@ -1053,6 +1144,8 @@ class EssentialPlugin(MaiBotPlugin):
         parameters=None,
     )
     async def tool_get_hitokoto(self, **kwargs: Any):
+        if not self._group_allowed(kwargs):
+            return {"content": GROUP_BLOCK_TOOL_HINT}
         if not self._feature_enabled("hitokoto"):
             return {"content": "一言功能当前已关闭，请勿再调用此工具。"}
         try:
@@ -1068,6 +1161,8 @@ class EssentialPlugin(MaiBotPlugin):
         parameters=None,
     )
     async def tool_random_food(self, **kwargs: Any):
+        if not self._group_allowed(kwargs):
+            return {"content": GROUP_BLOCK_TOOL_HINT}
         if not self._feature_enabled("what_to_eat"):
             return {"content": "今天吃什么功能当前已关闭，请勿再调用此工具。"}
         return {"content": f"推荐：{self._food.choice()}"}
@@ -1094,6 +1189,8 @@ class EssentialPlugin(MaiBotPlugin):
         ],
     )
     async def tool_report_card(self, text: str = "", mood: str = "happy", **kwargs: Any):
+        if not self._group_allowed(kwargs):
+            return {"content": GROUP_BLOCK_TOOL_HINT}
         if not self._feature_enabled("report"):
             return {"content": "喜报/悲报功能当前已关闭，请勿再调用此工具。"}
         text = (text or "").strip()
@@ -1145,6 +1242,8 @@ class EssentialPlugin(MaiBotPlugin):
     async def tool_jinqi_banner(
         self, thanks: str = "", recipient: str = "", signer: str = "", **kwargs: Any
     ):
+        if not self._group_allowed(kwargs):
+            return {"content": GROUP_BLOCK_TOOL_HINT}
         if not self._feature_enabled("jinqi"):
             return {"content": "锦旗功能当前已关闭，请勿再调用此工具。"}
         # `|` 是分段符，出现在感谢语里会串味，统一换成 `/`
@@ -1177,6 +1276,8 @@ class EssentialPlugin(MaiBotPlugin):
         parameters=None,
     )
     async def tool_get_daily_almanac(self, **kwargs: Any):
+        if not self._group_allowed(kwargs):
+            return {"content": GROUP_BLOCK_TOOL_HINT}
         if not self._feature_enabled("almanac"):
             return {"content": "今日宜忌功能当前已关闭，请勿再调用此工具。"}
         day = datetime.datetime.now(TZ8).date()
@@ -1197,6 +1298,8 @@ class EssentialPlugin(MaiBotPlugin):
         parameters=None,
     )
     async def tool_random_quote(self, **kwargs: Any):
+        if not self._group_allowed(kwargs):
+            return {"content": GROUP_BLOCK_TOOL_HINT}
         if not self._feature_enabled("quotes"):
             return {"content": "群友语录功能当前已关闭，请勿再调用此工具。"}
         stream_id = self._stream_id(kwargs)
@@ -1306,6 +1409,9 @@ class EssentialPlugin(MaiBotPlugin):
     )
     async def hook_passive_what_to_eat(self, **kwargs: Any):
         """被动触发：消息含"吃什么"类关键词时，按概率推荐食物或复读"是啊，吃什么"。"""
+
+        if not self._group_allowed(kwargs):
+            return None  # 群号黑名单 / 白名单外：整插件静默
 
         cfg = self.config.what_to_eat
         # 命令/工具看 enabled，被动触发另看 passive_enabled —— 两者独立
