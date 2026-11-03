@@ -105,7 +105,7 @@ render_almanac = _render_almanac.render_almanac
 _quotes_mod = _load_sibling_module("essential_quotes")
 QuoteStore = _quotes_mod.QuoteStore
 
-SUPPORTED_CONFIG_VERSION = "1.6.4"  # 与 manifest version 保持同步
+SUPPORTED_CONFIG_VERSION = "1.6.5"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -187,6 +187,12 @@ class GoodMorningSection(PluginConfigBase):
         "同一用户两次早晚安的最小间隔（分钟，0 为不限制）",
         default=30,
         ge=0,
+    )
+    cooldown_intercept: bool = _ui_field(
+        "冷却期拦截消息",
+        "冷却期内再发早安 / 晚安时是否吞掉该消息（吞掉后麦麦看不见）；"
+        "关闭则消息照常交给麦麦，由它自行决定要不要接话",
+        default=False,
     )
     forward_to_mai: bool = _ui_field(
         "记录同步给麦麦",
@@ -931,7 +937,9 @@ class EssentialPlugin(MaiBotPlugin):
             await self.ctx.send.text(
                 f"你刚刚已经说过早安/晚安了，请{cooldown_minutes}分钟后再试喵~", stream_id
             )
-            return False, "冷却中", True
+            # 冷却期默认放行（不吞消息），由麦麦自行决定是否也接一句；
+            # cooldown_intercept=True 时恢复旧行为：吞掉这条消息，麦麦看不见。
+            return False, "冷却中", bool(self.config.good_morning.cooldown_intercept)
 
         is_night = kind == "晚安"
         user = self._good_morning.user_record(stream_id, user_id)

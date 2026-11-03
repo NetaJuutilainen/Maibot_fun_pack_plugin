@@ -88,6 +88,8 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 说明：
 
 - 早晚安默认 30 分钟冷却（同一用户），可在配置中调整；冷却数据存内存，重启即清零。
+  冷却期内再发早安/晚安时，**默认只回一句提示、不吞消息**（麦麦照旧看得见这条），
+  想恢复"冷却期直接吞掉"的旧行为把 `good_morning.cooldown_intercept` 改成 `true`。
 - 早晚安记录、食物清单持久化在 `data/plugins/<插件ID>/` 下（`good_morning.json`、`food.json`），
   首次加载自动从插件自带清单初始化食物列表。原版插件存在重启丢早晚安数据的问题，本移植已修复。
 - 麦麦接话的实现方式：命令返回 `intercept=False` + 通过 `maisaka.context.append` 把统计信息写入会话上下文，
@@ -163,6 +165,7 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 | `[jinqi]` | `date_style` | chinese | 日期写法：`chinese` / `numeric` / `none` |
 | `[jinqi]` | `default_signer` | "" | 落款默认值，留空则用发送者昵称 +「敬赠」 |
 | `[good_morning]` | `cooldown_minutes` | 30 | 同一用户两次早晚安的最小间隔（0 不限制） |
+| `[good_morning]` | `cooldown_intercept` | false | 冷却期内再发早晚安时是否**吞掉**该消息；false = 放行，让麦麦自行决定要不要接话 |
 | `[good_morning]` | `forward_to_mai` | true | 记录后把统计信息交给麦麦供其发挥 |
 | `[hitokoto]` | `request_timeout_sec` | 10 | 一言 API 请求超时（秒） |
 | `[what_to_eat]` | `trigger_keywords` | ["吃什么"] | 被动触发关键词列表 |
@@ -210,6 +213,7 @@ MaiBot（麦麦）娱乐功能插件合集。**部分功能移植自 AstrBot 插
 
 | 版本 | 日期 | 更新内容 |
 |---|---|---|
+| **1.6.5** | 2026-11-03 | **早晚安冷却期不再吞消息**（默认行为变化）：冷却内再发早安/晚安时消息照常放行给麦麦，只回一句提示（文案不变）；新增 `[good_morning] cooldown_intercept`（默认 false），设为 true 可恢复旧的"冷却期吞消息"行为 |
 | **1.6.4** | 2026-10-27 | **新增群号名单**（`[group_filter]`）：先选模式再填一份名单 —— `mode = "block"`（默认）时名单里的群禁用整个插件，`mode = "allow"` 时只有名单里的群能用，**名单留空即全局通过**、私聊不受限；命令 / LLM 工具 / 被动触发统一过同一道门控；**安全加固**（市场审核意见）：群友语录的 `group_id` 增加白名单校验与路径 containment 检查，索引 / 图片写入 / 随机读取 / 清理 / 旧数据迁移全部收口；**修复** `/群友语录` 命令因与 LLM 工具同名 `random_quote` 被宿主注册表覆盖而失效（命令组件改名 `random_group_quote`，命令文本与工具名不变） |
 | **1.6.3** | 2026-10-26 | 修复徽章 emoji 居中不彻底：墨迹探测图逐枚重置，顶部锦旗徽章真正居中 |
 | **1.6.2** | 2026-10-26 | 修复插件图标顶部「锦旗」徽章的 emoji 未对齐：按实际墨迹包围盒居中，8 枚徽章全部重排 |
