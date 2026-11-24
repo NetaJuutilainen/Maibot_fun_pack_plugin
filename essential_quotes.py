@@ -170,17 +170,81 @@ class QuoteStore:
             stale = quotes[:excess]
             del quotes[:excess]
             for old in stale:
-                # 路径再校验一次：索引里的 file 字段可能是被手改过的脏数据，
-                # 校验不过就只从索引里剔除、绝不 unlink 数据目录外的文件
-                old_path = self._image_path(gid, old.get("file"))
-                if old_path is None:
-                    continue
-                try:
-                    old_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
+                self._unlink_quote_file(gid, old)
         self._save(gid)
         return True, "ok"
+
+    def _unlink_quote_file(self, gid: str, quote: dict) -> None:
+        """安全删除单条语录对应的图片文件（越界文件名绝不 unlink）。"""
+        old_path = self._image_path(gid, (quote or {}).get("file"))
+        if old_path is None:
+            return
+        try:
+            old_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def find_by_hash(self, group_id: str, image_hash: str) -> dict | None:
+        """按图片 SHA256 哈希在本群语录库查找条目。"""
+        gid = _safe_group_id(group_id)
+        digest = str(image_hash or "").strip().lower()
+        if gid is None or not _SAFE_IMAGE_HASH.fullmatch(digest):
+            return None
+        for q in self._load(gid):
+            if str(q.get("image_hash") or "").strip().lower() == digest:
+                return q
+        return None
+
+    def find_by_message_id(self, group_id: str, message_id: str) -> dict | None:
+        """按原消息 ID 在本群语录库查找条目（命中多条时优先最新）。"""
+        gid = _safe_group_id(group_id)
+        mid = str(message_id or "").strip()
+        if gid is None or not mid:
+            return None
+        for q in reversed(self._load(gid)):
+            if str(q.get("message_id") or "").strip() == mid:
+                return q
+        return None
+
+    def latest(self, group_id: str) -> dict | None:
+        """返回本群最新一条语录；无则返回 None。"""
+        gid = _safe_group_id(group_id)
+        if gid is None:
+            return None
+        quotes = self._load(gid)
+        return quotes[-1] if quotes else None
+
+    def remove_by_hash(self, group_id: str, image_hash: str) -> tuple[bool, dict | None]:
+        """按图片哈希删除一条语录并清理对应图片文件。"""
+        gid = _safe_group_id(group_id)
+        digest = str(image_hash or "").strip().lower()
+        if gid is None or not _SAFE_IMAGE_HASH.fullmatch(digest):
+            return False, None
+        quotes = self._load(gid)
+        for idx, q in enumerate(quotes):
+            if str(q.get("image_hash") or "").strip().lower() == digest:
+                removed = quotes.pop(idx)
+                file_name = removed.get("file")
+                if not any(other.get("file") == file_name for other in quotes):
+                    self._unlink_quote_file(gid, removed)
+                self._save(gid)
+                return True, removed
+        return False, None
+
+    def remove_latest(self, group_id: str) -> tuple[bool, dict | None]:
+        """删除本群最近一条语录并清理对应图片文件。"""
+        gid = _safe_group_id(group_id)
+        if gid is None:
+            return False, None
+        quotes = self._load(gid)
+        if not quotes:
+            return False, None
+        removed = quotes.pop()
+        file_name = removed.get("file")
+        if not any(other.get("file") == file_name for other in quotes):
+            self._unlink_quote_file(gid, removed)
+        self._save(gid)
+        return True, removed
 
     def random(self, group_id: str) -> dict | None:
         """随机抽一条；索引里图片文件已丢失的条目顺手清掉。"""

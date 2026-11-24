@@ -111,7 +111,7 @@ _render_quote = _load_sibling_module("essential_render_quote")
 render_quote_card = _render_quote.render_quote_card
 format_quote_date = _render_quote.format_quote_date
 
-SUPPORTED_CONFIG_VERSION = "1.7.0"  # 与 manifest version 保持同步
+SUPPORTED_CONFIG_VERSION = "1.7.1"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -366,6 +366,11 @@ class QuotesSection(PluginConfigBase):
         "文字语录日期格式",
         "chinese＝2026年11月24日；dot＝2026.11.24；none＝不显示日期",
         default="chinese",
+    )
+    delete_admin_users: list[str] = _ui_field(
+        "删语录管理员 QQ",
+        "填写 QQ 号列表（一行一个）；留空＝群内任何人都能删语录；填了则只有列表内管理员或该条语录的记录者可删",
+        default_factory=list,
     )
 
 
@@ -713,6 +718,7 @@ class EssentialPlugin(MaiBotPlugin):
         if self._feature_enabled("quotes"):
             lines.append("/投稿语录 —— 回复图片或文字消息，生成语录并投稿到本群语录库")
             lines.append("/群友语录 —— 随机一条本群投稿的语录图片")
+            lines.append("/删语录 [最新] —— 回复语录图片或直接删除最近一条本群语录")
 
         lines.append("/工具列表 —— 显示本菜单")
 
@@ -1057,15 +1063,7 @@ class EssentialPlugin(MaiBotPlugin):
             return False, "非群聊消息", True
 
         # 从当前消息里取 reply 段，拿到被回复消息 ID
-        raw_message = message.get("raw_message") or []
-        target_message_id = ""
-        for seg in raw_message:
-            if isinstance(seg, dict) and str(seg.get("type") or "") == "reply":
-                data = seg.get("data")
-                target_message_id = str(
-                    data.get("target_message_id", "") if isinstance(data, dict) else data
-                ).strip()
-                break
+        target_message_id = self._reply_target_id(message)
         if not target_message_id:
             await self.ctx.send.text("请先回复一张图片或一条文字消息，再发送 /投稿语录", stream_id)
             return False, "无回复目标", True
@@ -1161,6 +1159,17 @@ class EssentialPlugin(MaiBotPlugin):
             return False, "群号非法", True
         await self.ctx.send.text("投稿失败了，请查看主进程日志排查。", stream_id)
         return False, "投稿失败", True
+
+    @staticmethod
+    def _reply_target_id(message: dict[str, Any]) -> str:
+        """从消息 raw_message 中提取 reply 段指向的目标消息 ID。"""
+        for seg in message.get("raw_message") or []:
+            if isinstance(seg, dict) and str(seg.get("type") or "") == "reply":
+                data = seg.get("data")
+                return str(
+                    data.get("target_message_id", "") if isinstance(data, dict) else data
+                ).strip()
+        return ""
 
     @staticmethod
     def _parse_message_date(raw_ts: Any) -> datetime.date:
@@ -1321,6 +1330,7 @@ class EssentialPlugin(MaiBotPlugin):
             data = await fetch_avatar_bytes(fallback_url)
             if data:
                 return data
+        self.ctx.logger.warning("获取群友头像失败（user_id=%s），将使用首字兜底图", uid)
         return None
 
     @Command(
@@ -1352,6 +1362,89 @@ class EssentialPlugin(MaiBotPlugin):
             return False, "图片读取失败", True
         await self.ctx.send.image(image_b64, stream_id)
         return True, "语录已发送", True
+
+    @Command(
+        "delete_quote",
+        description="删除本群语录（回复语录图发 /删语录，或发 /删语录 最新）",
+        pattern=r"(?<!\S)/(?:删语录|删除语录)(?:\s+(?P<target>最新|最后|-1))?(?:\s*\[[^\]]*\])*\s*$",
+    )
+    async def cmd_delete_quote(self, **kwargs: Any):
+        """删除语录：支持回复语录图片/原消息匹配，或 /删语录 最新 删除最后一条。"""
+        if not self._group_allowed(kwargs):
+            return False, GROUP_BLOCK_COMMAND_REASON, True
+        if not self._feature_enabled("quotes"):
+            return False, "群友语录功能已在配置中关闭", True
+        stream_id = self._stream_id(kwargs)
+        message = kwargs.get("message") or {}
+        info = message.get("message_info") or {}
+        group_id = str((info.get("group_info") or {}).get("group_id") or "")
+        if not group_id:
+            await self.ctx.send.text("群友语录仅支持群聊使用", stream_id)
+            return False, "非群聊消息", True
+
+        matched = kwargs.get("matched_groups") or {}
+        target = str(matched.get("target") or "").strip()
+        target_message_id = "" if target else self._reply_target_id(message)
+
+        quote: dict | None = None
+        if target:
+            quote = await asyncio.to_thread(self._quotes.latest, group_id)
+            if quote is None:
+                await self.ctx.send.text("本群语录库为空，没有可删除的语录。", stream_id)
+                return False, "语录库为空", True
+        elif target_message_id:
+            kind, payload = await self._fetch_quote_target(target_message_id, info)
+            if kind == "image":
+                sha_hash = hashlib.sha256(payload["image_bytes"]).hexdigest()
+                quote = await asyncio.to_thread(self._quotes.find_by_hash, group_id, sha_hash)
+                if quote is None and payload.get("image_hash"):
+                    quote = await asyncio.to_thread(
+                        self._quotes.find_by_hash, group_id, payload["image_hash"],
+                    )
+            if quote is None:
+                quote = await asyncio.to_thread(
+                    self._quotes.find_by_message_id, group_id, target_message_id,
+                )
+            if quote is None:
+                await self.ctx.send.text(
+                    "未在语录库中找到对应条目（QQ 压缩转发后图片哈希可能变化，刚投稿的可直接发 /删语录 最新 删除）。",
+                    stream_id,
+                )
+                return False, "未找到语录", True
+        else:
+            await self.ctx.send.text(
+                "请回复一条语录图片发送 /删语录，或直接发送 /删语录 最新 删除刚投稿的一条。",
+                stream_id,
+            )
+            return False, "无删除目标", True
+
+        admins = {
+            str(x).strip()
+            for x in (getattr(self.config.quotes, "delete_admin_users", None) or [])
+            if str(x).strip()
+        }
+        if admins:
+            caller_id = self._user_id(kwargs)
+            owner_id = str(quote.get("user_id") or "").strip()
+            if caller_id not in admins and (not owner_id or caller_id != owner_id):
+                await self.ctx.send.text(
+                    "你没有权限删除这条语录（仅管理员或记录者本人可删除）。", stream_id,
+                )
+                return False, "无删除权限", True
+
+        target_hash = str(quote.get("image_hash") or "").strip()
+        ok, removed = await asyncio.to_thread(self._quotes.remove_by_hash, group_id, target_hash)
+        if ok:
+            nick = str((removed or {}).get("user_nickname") or "").strip()
+            author_hint = f"（{nick}）" if nick else ""
+            await self.ctx.send.text(
+                f"已删除语录{author_hint}，本群剩余 {self._quotes.count(group_id)} 条语录。",
+                stream_id,
+            )
+            return True, "语录已删除", True
+
+        await self.ctx.send.text("这条语录刚才已经被删掉了。", stream_id)
+        return False, "删除失败", True
 
     # -- LLM 工具组件（deferred 池，麦麦经 tool_search 发现） -----------------
 
