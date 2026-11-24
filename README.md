@@ -10,7 +10,7 @@
 
   <!-- Badges -->
   <p>
-    <img src="https://img.shields.io/badge/Version-1.6.6-dc2626?style=flat-square&labelColor=1e293b" alt="Version 1.6.6">
+    <img src="https://img.shields.io/badge/Version-1.7.0-dc2626?style=flat-square&labelColor=1e293b" alt="Version 1.7.0">
     <img src="https://img.shields.io/badge/MaiBot-%3E%3D1.3.0-f59e0b?style=flat-square&labelColor=1e293b" alt="MaiBot >= 1.3.0">
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e?style=flat-square&labelColor=1e293b" alt="License: MIT"></a>
     <img src="https://img.shields.io/github/stars/NetaJuutilainen/Maibot_fun_pack_plugin?label=Stars&color=eab308&style=flat-square&labelColor=1e293b" alt="Stars">
@@ -20,7 +20,7 @@
   <p>
     <b>麦爹的娱乐功能合集</b> —— 喜报 / 悲报 · 传统锦旗 · 一言 · 答案之书 · 今天吃什么 · 早晚安 · 今日宜忌 · 群友语录<br/>
     同时支持群聊指令与 <b>麦麦自主调用的 LLM 工具</b>，开箱即用、模块独立开关、支持群号黑白名单<br/>
-    <sub>部分功能移植自 <a href="https://github.com/Soulter/astrbot_plugin_essential">astrbot_plugin_essential</a>（Soulter / FateTrial）并针对 MaiBot 重构 · 当前版本 <b>1.6.6</b></sub>
+    <sub>部分功能移植自 <a href="https://github.com/Soulter/astrbot_plugin_essential">astrbot_plugin_essential</a>（Soulter / FateTrial）并针对 MaiBot 重构 · 当前版本 <b>1.7.0</b></sub>
   </p>
 
   <!-- Quick Navigation -->
@@ -54,6 +54,11 @@
 | <a href="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_fun_pack_plugin@main/docs/images/jinqi.jpg"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_fun_pack_plugin@main/docs/images/jinqi.jpg" width="380" alt="锦旗示例"></a> | <a href="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_fun_pack_plugin@main/docs/images/almanac.jpg"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_fun_pack_plugin@main/docs/images/almanac.jpg" width="380" alt="今日宜忌示例"></a> |
 | `/锦旗 助人为乐 情暖人心 \| 赠：麦麦 \| 全体群友` | 真实农历冲煞 · 十二时辰吉凶 · 满运盖「百无禁忌」章 |
 
+| 文字语录（默认黑白头像） | 文字语录（彩色头像） |
+|:---:|:---:|
+| <a href="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_fun_pack_plugin@main/docs/images/quote_bw.jpg"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_fun_pack_plugin@main/docs/images/quote_bw.jpg" width="380" alt="文字语录黑白示例"></a> | <a href="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_fun_pack_plugin@main/docs/images/quote_color.jpg"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_fun_pack_plugin@main/docs/images/quote_color.jpg" width="380" alt="文字语录彩色示例"></a> |
+| 回复纯文字发送 `/投稿语录`：多段落自适应字号 + 暖金色大引号 | 支持切换彩色头像与点分日期，入库并即时回发一次 |
+
 ---
 
 <a id="功能与命令"></a>
@@ -76,7 +81,7 @@
 | 聊天中提到“吃什么” | **被动触发**（非命令）：按概率（默认 30%）推荐美食或复读“是啊，吃什么”；60 秒内被动响应超 3 次强制推荐、复读后 15 秒冷却（防多 Bot 循环）；回复后默认拦截该消息 | 默认拦截 |
 | 早安 / `晚安`（支持"晚安啦~"等常见后缀，`/` 可省） | 记录作息并回复统计（睡了多久 / 本群今天第 N 个睡觉的）；**之后放行消息，麦麦自行决定是否再回复** | 是 |
 | `今日宜忌`（`/` 可省，别名 `今日黄历`） | 发一张**黄历风图片**：宜 4 条 / 忌 3 条 + 十二时辰吉凶格 + 吉利方位、幸运数字、幸运色、幸运物、运势星级（满运盖「百无禁忌」章）；附**真实农历**（月日 / 干支年 / 生肖 / 日干支 / 冲煞）。**宜忌与梗内容同一天全群同结果**（日期做种子），第二天自动换新 | 否 |
-| `/投稿语录` | **群友语录投稿**：回复一张含图片的消息，把图片收进本群语录库（按图片内容哈希去重，每群上限默认 500 条） | 否 |
+| `/投稿语录` | **群友语录投稿**：回复含图片消息直接收图；**回复纯文字消息**则自动拉取原作者头像生成名言卡片（大引号 + 昵称完整换行 + 日期）、入库并立即发送一次（按内容哈希去重，每群上限默认 500 条） | 否 |
 | `/群友语录`（`/uu语录`、`/群u语录` 亦可） | 随机发一张本群投稿的语录图片（数据按群隔离） | 否 |
 
 ---
@@ -204,6 +209,8 @@
 | `[almanac]` | `custom_yi` / `custom_ji` | `[]` | 追加自定义宜 / 忌词条（与内置词条一起参与每日抽取） |
 | `[quotes]` | `max_quotes_per_group` | `500` | 每群语录上限，超出自动清理最旧（含图片文件） |
 | `[quotes]` | `migrate_legacy` | `true` | 首次加载时自动迁移 uumessage 旧语录数据（只读旧库，不删原数据） |
+| `[quotes]` | `text_quote_avatar_style` | `bw` | 文字语录自动生图头像色调：`bw`（经典黑白）/ `color`（彩色） |
+| `[quotes]` | `text_quote_date_style` | `chinese` | 文字语录日期格式：`chinese`（`2026年11月24日`）/ `dot`（`2026.11.24`）/ `none`（不显示） |
 
 </details>
 
@@ -211,7 +218,7 @@
 <summary><b>🧩 展开查看：能力声明（capabilities）、代码结构与历史版本记录</b></summary>
 
 #### 能力声明（capabilities）
-`send.text`、`send.image`、`send.hybrid`、`maisaka.context.append`、`chat.get_stream_by_group_id`、`chat.get_stream_by_user_id`、`message.get_by_id`（`/投稿语录` 取被回复消息）。修改 manifest 中的能力声明后必须完整重启 MaiBot。
+`send.text`、`send.image`、`send.hybrid`、`maisaka.context.append`、`chat.get_stream_by_group_id`、`chat.get_stream_by_user_id`、`chat.get_avatar`（获取群友头像源地址，用于文字语录自动配图）、`message.get_by_id`（`/投稿语录` 取被回复消息）。修改 manifest 中的能力声明后建议完整重启 MaiBot（其中 `chat.get_avatar` 未重启前会自动降级回退 QQ 头像直链与首字兜底图）。
 
 #### 代码结构
 同目录平铺的模块**互不 import**，只通过函数参数 / 属性传数据（宿主 Runner 以文件路径逐个加载同目录模块，兄弟模块间无法用普通 `import` 互相引用；能脱离 `maibot_sdk` 的领域逻辑尽量独立成模块以便脱离宿主单独跑）：
@@ -228,12 +235,15 @@
 | `essential_almanac.py` | 今日宜忌**内容规格**：按日期种子抽取宜忌与幸运签（纯逻辑，零 PIL 依赖） |
 | `essential_render_almanac.py` | 今日宜忌**渲染**：黄历版式、方形朱印、缺字回退（PIL） |
 | `essential_quotes.py` | 群友语录存储（每群 JSON 索引 + 图片文件）与 uumessage 旧数据迁移 |
+| `essential_render_quote.py` | 文字版群友语录渲染：左侧头像渐变融合、大引号、正文缩号与昵称完整换行（PIL） |
 
 #### 版本记录
 完整更新日志见 [CHANGELOG.md](CHANGELOG.md)。
 
 | 版本 | 日期 | 更新内容 |
 |---|---|---|
+| **1.7.0** | 2026-11-24 | **文字版群友语录自动生图**：`/投稿语录` 回复纯文字消息时自动拉取头像生成 MakeItAQuote 风格名言卡片（暖金色大引号、自适应正文字号、超长昵称完整换行）、收进语录库并立即发送一次；新增 `[quotes] text_quote_avatar_style`（`bw`/`color`）与 `text_quote_date_style`（`chinese`/`dot`/`none`）配置；新增 `chat.get_avatar` 能力声明；`sdk.max_version` 扩至 `2.23.99` |
+| **1.6.6** | 2026-11-09 | 兼容声明扩展（无功能变更）：`host_application.max_version` 扩至 `1.4.99`，`sdk.max_version` 扩至 `2.22.99` |
 | **1.6.5** | 2026-11-03 | **早晚安冷却期不再吞消息**（默认行为变化）：冷却内再发早安/晚安时消息照常放行给麦麦，只回一句提示（文案不变）；新增 `[good_morning] cooldown_intercept`（默认 `false`），设为 `true` 可恢复旧的"冷却期吞消息"行为 |
 | **1.6.4** | 2026-10-27 | **新增群号名单**（`[group_filter]`）：`mode = "block"`（黑名单）/ `mode = "allow"`（白名单），名单留空即全局通过、私聊不受限；**安全加固**（市场审核意见）：群友语录 `group_id` 白名单校验与路径 containment 检查；**修复** `/群友语录` 命令因与 LLM 工具同名 `random_quote` 被宿主注册表覆盖而失效（命令组件改名 `random_group_quote`） |
 | **1.6.3** | 2026-10-26 | 修复徽章 emoji 居中不彻底：墨迹探测图逐枚重置，顶部锦旗徽章真正居中 |

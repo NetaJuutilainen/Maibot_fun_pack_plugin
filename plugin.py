@@ -32,6 +32,7 @@ tool_search 按需发现）。
     essential_almanac.py        今日宜忌内容规格（按日期种子抽取）
     essential_render_almanac.py 今日宜忌渲染
     essential_quotes.py         群友语录存储 + uumessage 旧数据迁移
+    essential_render_quote.py   文字版群友语录 PIL 渲染
 """
 
 from __future__ import annotations
@@ -78,6 +79,8 @@ _jinqi = _load_sibling_module("essential_jinqi")
 _render_jinqi = _load_sibling_module("essential_render_jinqi")
 
 fetch_hitokoto = _services.fetch_hitokoto
+fetch_avatar_bytes = _services.fetch_avatar_bytes
+qq_avatar_url = _services.qq_avatar_url
 AnswerBook = _storage.AnswerBook
 FoodStore = _storage.FoodStore
 GoodMorningStore = _storage.GoodMorningStore
@@ -104,8 +107,11 @@ render_almanac = _render_almanac.render_almanac
 
 _quotes_mod = _load_sibling_module("essential_quotes")
 QuoteStore = _quotes_mod.QuoteStore
+_render_quote = _load_sibling_module("essential_render_quote")
+render_quote_card = _render_quote.render_quote_card
+format_quote_date = _render_quote.format_quote_date
 
-SUPPORTED_CONFIG_VERSION = "1.6.6"  # 与 manifest version 保持同步
+SUPPORTED_CONFIG_VERSION = "1.7.0"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -350,6 +356,16 @@ class QuotesSection(PluginConfigBase):
         "迁移旧版数据",
         "首次加载时自动迁移 uumessage 插件的语录数据（只读旧库并复制，不删除原数据）",
         default=True,
+    )
+    text_quote_avatar_style: Literal["bw", "color"] = _ui_field(
+        "文字语录头像色调",
+        "回复纯文字消息自动生图时的头像色调：bw＝经典黑白，color＝彩色",
+        default="bw",
+    )
+    text_quote_date_style: Literal["chinese", "dot", "none"] = _ui_field(
+        "文字语录日期格式",
+        "chinese＝2026年11月24日；dot＝2026.11.24；none＝不显示日期",
+        default="chinese",
     )
 
 
@@ -695,7 +711,7 @@ class EssentialPlugin(MaiBotPlugin):
         if self._feature_enabled("almanac"):
             lines.append("今日宜忌 —— 每日黄历图片（同一天全群同结果，第二天自动换新）")
         if self._feature_enabled("quotes"):
-            lines.append("/投稿语录 —— 回复一张图片投稿到本群语录库")
+            lines.append("/投稿语录 —— 回复图片或文字消息，生成语录并投稿到本群语录库")
             lines.append("/群友语录 —— 随机一条本群投稿的语录图片")
 
         lines.append("/工具列表 —— 显示本菜单")
@@ -1023,11 +1039,11 @@ class EssentialPlugin(MaiBotPlugin):
 
     @Command(
         "submit_quote",
-        description="投稿群友语录（回复一张图片使用）",
+        description="投稿群友语录（回复图片或文字消息使用）",
         pattern=r"(?<!\S)/投稿语录(?:\s*\[[^\]]*\])*\s*$",
     )
     async def cmd_submit_quote(self, **kwargs: Any):
-        """投稿：回复一张含图片的消息，把图片收进本群语录库（按图片哈希去重）。"""
+        """投稿：回复图片收进语录库；回复纯文字则生成名言图、入库并立即发送。"""
         if not self._group_allowed(kwargs):
             return False, GROUP_BLOCK_COMMAND_REASON, True
         if not self._feature_enabled("quotes"):
@@ -1051,42 +1067,130 @@ class EssentialPlugin(MaiBotPlugin):
                 ).strip()
                 break
         if not target_message_id:
-            await self.ctx.send.text("请先回复一张图片消息，再发送 /投稿语录", stream_id)
+            await self.ctx.send.text("请先回复一张图片或一条文字消息，再发送 /投稿语录", stream_id)
             return False, "无回复目标", True
 
-        # 取被回复消息（含图片二进制）；取不到二进制时按 hash 回退宿主图片库
-        image_hash, image_bytes = await self._fetch_quote_image(target_message_id)
-        if not image_bytes:
-            await self.ctx.send.text("被回复的消息不存在、已过期或不含图片", stream_id)
-            return False, "取图失败", True
-        if not image_hash:
-            image_hash = hashlib.sha256(image_bytes).hexdigest()
+        kind, payload = await self._fetch_quote_target(target_message_id, info)
+        if kind == "none":
+            await self.ctx.send.text(
+                "被回复的消息不存在、已过期，或不含可投稿的图片/文字内容", stream_id,
+            )
+            return False, "获取目标消息失败", True
+
+        if kind == "image":
+            image_bytes = payload["image_bytes"]
+            image_hash = payload["image_hash"] or hashlib.sha256(image_bytes).hexdigest()
+            ok, reason = await asyncio.to_thread(
+                self._quotes.add,
+                group_id, self._user_id(kwargs), self._nickname(kwargs),
+                image_hash, image_bytes,
+                message_id=target_message_id,
+                max_per_group=int(self.config.quotes.max_quotes_per_group),
+            )
+            if ok:
+                await self.ctx.send.text(
+                    f"投稿成功！本群已有 {self._quotes.count(group_id)} 条语录。", stream_id,
+                )
+                return True, "投稿成功", True
+            if reason == "duplicate":
+                await self.ctx.send.text("这张图片已经投稿过了", stream_id)
+                return False, "重复投稿", True
+            if reason == "invalid_group_id":
+                self.ctx.logger.warning("群号未通过安全校验，拒绝投稿：%r", group_id)
+                await self.ctx.send.text("本群群号格式异常，语录功能暂不可用。", stream_id)
+                return False, "群号非法", True
+            await self.ctx.send.text("投稿失败了，请查看主进程日志排查。", stream_id)
+            return False, "投稿失败", True
+
+        # 纯文字消息：获取原作者头像并生成语录图 -> 入库 -> 发送一次
+        author_id = payload["user_id"]
+        author_nick = payload["nickname"]
+        avatar_bytes = await self._fetch_author_avatar(
+            payload["platform"],
+            author_id,
+            account_id=payload["account_id"],
+            scope=payload["scope"],
+        )
+        avatar_style = str(
+            getattr(self.config.quotes, "text_quote_avatar_style", "bw") or "bw"
+        ).strip().lower()
+        date_style = str(
+            getattr(self.config.quotes, "text_quote_date_style", "chinese") or "chinese"
+        ).strip().lower()
+        date_text = format_quote_date(payload["date"], date_style)
+
+        image_bytes = await asyncio.to_thread(
+            render_quote_card,
+            payload["text"],
+            author_nick,
+            avatar_bytes=avatar_bytes,
+            date_text=date_text,
+            font_path=_PLUGIN_DIR / "assets" / "NotoSansSC.ttf",
+            accent_font_path=_PLUGIN_DIR / "assets" / "MaShanZheng.ttf",
+            grayscale=(avatar_style != "color"),
+        )
+        image_hash = hashlib.sha256(image_bytes).hexdigest()
 
         ok, reason = await asyncio.to_thread(
             self._quotes.add,
-            group_id, self._user_id(kwargs), self._nickname(kwargs),
+            group_id, author_id, author_nick,
             image_hash, image_bytes,
             message_id=target_message_id,
             max_per_group=int(self.config.quotes.max_quotes_per_group),
         )
         if ok:
-            await self.ctx.send.text(
-                f"投稿成功！本群已有 {self._quotes.count(group_id)} 条语录。", stream_id,
-            )
-            return True, "投稿成功", True
+            image_b64 = base64.b64encode(image_bytes).decode("ascii")
+            sent = await self.ctx.send.image(image_b64, stream_id)
+            if sent:
+                await self.ctx.send.text(
+                    f"文字语录已生成并投稿！本群已有 {self._quotes.count(group_id)} 条语录。",
+                    stream_id,
+                )
+            else:
+                await self.ctx.send.text(
+                    f"文字语录已收进语录库（本群共 {self._quotes.count(group_id)} 条），但即时图片发送失败了，可稍后用 /群友语录 查看。",
+                    stream_id,
+                )
+            return True, "文字语录已生成并投稿", True
         if reason == "duplicate":
-            await self.ctx.send.text("这张图片已经投稿过了", stream_id)
+            await self.ctx.send.text("这条语录已经投稿过了", stream_id)
             return False, "重复投稿", True
         if reason == "invalid_group_id":
-            # 群号没过安全白名单（非数字/字母/下划线/短横）：不落盘、不建目录
             self.ctx.logger.warning("群号未通过安全校验，拒绝投稿：%r", group_id)
             await self.ctx.send.text("本群群号格式异常，语录功能暂不可用。", stream_id)
             return False, "群号非法", True
         await self.ctx.send.text("投稿失败了，请查看主进程日志排查。", stream_id)
         return False, "投稿失败", True
 
-    async def _fetch_quote_image(self, target_message_id: str) -> tuple[str, bytes]:
-        """取被回复消息里的图片：优先 get_by_id 二进制，其次按 hash 探测宿主图片库。"""
+    @staticmethod
+    def _parse_message_date(raw_ts: Any) -> datetime.date:
+        """从消息时间戳或 ISO 字符串解析 TZ8 日期，失败回退当天。"""
+        if isinstance(raw_ts, (int, float)) and raw_ts > 0:
+            ts = raw_ts / 1000.0 if raw_ts > 1e11 else float(raw_ts)
+            try:
+                return datetime.datetime.fromtimestamp(ts, tz=TZ8).date()
+            except (OSError, OverflowError, ValueError):
+                pass
+        if isinstance(raw_ts, str):
+            text = raw_ts.strip()
+            if text:
+                try:
+                    num = float(text)
+                    if num > 0:
+                        ts = num / 1000.0 if num > 1e11 else num
+                        return datetime.datetime.fromtimestamp(ts, tz=TZ8).date()
+                except ValueError:
+                    pass
+                try:
+                    return datetime.date.fromisoformat(text[:10])
+                except ValueError:
+                    pass
+        return datetime.datetime.now(TZ8).date()
+
+    async def _fetch_quote_target(
+        self, target_message_id: str, fallback_info: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        """取被回复消息并区分图片消息与纯文字消息。"""
         try:
             result = await self.ctx.message.get_by_id(
                 target_message_id, include_binary_data=True
@@ -1094,25 +1198,130 @@ class EssentialPlugin(MaiBotPlugin):
         except Exception as e:  # noqa: BLE001 - 能力未授权/旧宿主无此能力时走兜底
             self.ctx.logger.warning("get_by_id 取被回复消息失败: %s", e)
             result = None
-        if isinstance(result, dict) and "error" not in result:
-            for seg in result.get("raw_message") or []:
-                if not isinstance(seg, dict) or str(seg.get("type") or "") != "image":
-                    continue
-                image_hash = str(seg.get("hash") or "").strip().lower()
-                image_b64 = str(seg.get("binary_data_base64") or "").strip()
-                if image_b64:
-                    try:
-                        return image_hash, base64.b64decode(image_b64)
-                    except Exception:  # noqa: BLE001
-                        pass
-                if self._IMAGE_HASH_RE.match(image_hash):
-                    host_data_dir = Path(self.ctx.paths.data_dir).parent.parent
-                    data = await asyncio.to_thread(
-                        self._read_host_image_bytes, host_data_dir, "image", image_hash
-                    )
+        if not isinstance(result, dict) or "error" in result:
+            return "none", {}
+
+        raw_message = result.get("raw_message") or []
+        has_image_seg = False
+        for seg in raw_message:
+            if not isinstance(seg, dict) or str(seg.get("type") or "") != "image":
+                continue
+            has_image_seg = True
+            image_hash = str(seg.get("hash") or "").strip().lower()
+            image_b64 = str(seg.get("binary_data_base64") or "").strip()
+            if image_b64:
+                try:
+                    return "image", {
+                        "image_hash": image_hash,
+                        "image_bytes": base64.b64decode(image_b64),
+                    }
+                except Exception:  # noqa: BLE001
+                    pass
+            if self._IMAGE_HASH_RE.match(image_hash):
+                host_data_dir = Path(self.ctx.paths.data_dir).parent.parent
+                data = await asyncio.to_thread(
+                    self._read_host_image_bytes, host_data_dir, "image", image_hash
+                )
+                if data:
+                    return "image", {"image_hash": image_hash, "image_bytes": data}
+        if has_image_seg:
+            return "none", {}
+
+        text_parts: list[str] = []
+        has_non_text_media = False
+        for seg in raw_message:
+            if not isinstance(seg, dict):
+                continue
+            seg_type = str(seg.get("type") or "")
+            if seg_type == "text":
+                data = seg.get("data")
+                if isinstance(data, str):
+                    text_parts.append(data)
+                elif isinstance(data, dict):
+                    text_parts.append(str(data.get("text") or ""))
+                elif seg.get("text"):
+                    text_parts.append(str(seg.get("text")))
+            elif seg_type in {"emoji", "voice", "video", "file", "share", "forward"}:
+                has_non_text_media = True
+
+        quote_text = "".join(text_parts).strip()
+        if not quote_text and not has_non_text_media:
+            quote_text = str(result.get("processed_plain_text") or "").strip()
+        if not quote_text:
+            return "none", {}
+
+        msg_info = result.get("message_info") or {}
+        user_info = msg_info.get("user_info") or result.get("user_info") or {}
+        author_id = str(user_info.get("user_id") or result.get("user_id") or "").strip()
+        author_nick = str(
+            user_info.get("user_cardname")
+            or user_info.get("user_nickname")
+            or result.get("user_cardname")
+            or result.get("user_nickname")
+            or ""
+        ).strip() or "匿名群友"
+        platform = str(
+            msg_info.get("platform")
+            or user_info.get("platform")
+            or result.get("platform")
+            or fallback_info.get("platform")
+            or "qq"
+        ).strip() or "qq"
+        account_id = str(
+            msg_info.get("account_id") or fallback_info.get("account_id") or ""
+        ).strip()
+        scope = str(
+            msg_info.get("scope") or fallback_info.get("scope") or ""
+        ).strip()
+        raw_ts = msg_info.get("time") or result.get("time") or result.get("timestamp")
+        return "text", {
+            "text": quote_text,
+            "user_id": author_id,
+            "nickname": author_nick,
+            "platform": platform,
+            "account_id": account_id,
+            "scope": scope,
+            "date": self._parse_message_date(raw_ts),
+        }
+
+    async def _fetch_author_avatar(
+        self,
+        platform: str,
+        user_id: str,
+        *,
+        account_id: str = "",
+        scope: str = "",
+    ) -> bytes | None:
+        """获取语录原作者头像：优先宿主 chat.get_avatar，其次 QQ 头像直链，失败返回 None。"""
+        uid = str(user_id or "").strip()
+        if not uid:
+            return None
+        plat = str(platform or "qq").strip() or "qq"
+
+        chat_api = getattr(self.ctx, "chat", None)
+        get_avatar = getattr(chat_api, "get_avatar", None) if chat_api is not None else None
+        if callable(get_avatar):
+            try:
+                res = await get_avatar(
+                    plat,
+                    uid,
+                    target_type="user",
+                    account_id=account_id,
+                    scope=scope,
+                )
+                if isinstance(res, dict) and res.get("status") == "available" and res.get("url"):
+                    data = await fetch_avatar_bytes(str(res["url"]))
                     if data:
-                        return image_hash, data
-        return "", b""
+                        return data
+            except Exception as e:  # noqa: BLE001 - 未授权或适配器不支持时回退直链/兜底图
+                self.ctx.logger.debug("chat.get_avatar 查询失败，准备回退: %s", e)
+
+        fallback_url = qq_avatar_url(uid)
+        if fallback_url:
+            data = await fetch_avatar_bytes(fallback_url)
+            if data:
+                return data
+        return None
 
     @Command(
         "random_group_quote",
