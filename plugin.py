@@ -111,7 +111,7 @@ _render_quote = _load_sibling_module("essential_render_quote")
 render_quote_card = _render_quote.render_quote_card
 format_quote_date = _render_quote.format_quote_date
 
-SUPPORTED_CONFIG_VERSION = "1.7.1"  # 与 manifest version 保持同步
+SUPPORTED_CONFIG_VERSION = "1.7.2"  # 与 manifest version 保持同步
 
 TZ8 = datetime.timezone(datetime.timedelta(hours=8))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -1125,6 +1125,7 @@ class EssentialPlugin(MaiBotPlugin):
             date_text=date_text,
             font_path=_PLUGIN_DIR / "assets" / "NotoSansSC.ttf",
             accent_font_path=_PLUGIN_DIR / "assets" / "MaShanZheng.ttf",
+            emoji_font_path=_PLUGIN_DIR / "assets" / "NotoColorEmoji.ttf",
             grayscale=(avatar_style != "color"),
         )
         image_hash = hashlib.sha256(image_bytes).hexdigest()

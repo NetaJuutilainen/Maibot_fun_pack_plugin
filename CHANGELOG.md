@@ -7,6 +7,16 @@
 
 ---
 
+## [1.7.2] - 2026-11-25
+
+### 修复
+
+- **修复文字语录正文与昵称中的 Emoji 渲染为豆腐块（`☒`）问题**：
+  - `assets/` 新增打包 Google **Noto Color Emoji（Emoji 18，`NotoColorEmoji.ttf`，SIL OFL 1.1）**；
+  - `essential_render_quote.py` 新增混合字体排版管线：主字体 `NotoSansSC.ttf` 缺字或带 `VS16`（`\ufe0f`）的 Emoji 簇自动切换为彩色 Emoji 渲染，内建纯 Python `cmap` + `GSUB` 连字映射至 PUA 码点解析，在无 `libraqm` 的 Windows / Linux 环境下均可正确渲染单码点 Emoji（如 `🥺`、`🥭`、`🫠`、`🫶`）及复合序列（如 `❤️`、`👍🏻`、`🇨🇳`、`😮‍💨`、`1️⃣`、`👨‍👩‍👧‍👦`），并保持自适应缩号、居中对齐与投影。
+
+---
+
 ## [1.7.1] - 2026-11-24
 
 ### 修复

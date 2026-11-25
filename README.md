@@ -10,7 +10,7 @@
 
   <!-- Badges -->
   <p>
-    <img src="https://img.shields.io/badge/Version-1.7.1-dc2626?style=flat-square&labelColor=1e293b" alt="Version 1.7.1">
+    <img src="https://img.shields.io/badge/Version-1.7.2-dc2626?style=flat-square&labelColor=1e293b" alt="Version 1.7.2">
     <img src="https://img.shields.io/badge/MaiBot-%3E%3D1.3.0-f59e0b?style=flat-square&labelColor=1e293b" alt="MaiBot >= 1.3.0">
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e?style=flat-square&labelColor=1e293b" alt="License: MIT"></a>
     <img src="https://img.shields.io/github/stars/NetaJuutilainen/Maibot_fun_pack_plugin?label=Stars&color=eab308&style=flat-square&labelColor=1e293b" alt="Stars">
@@ -20,7 +20,7 @@
   <p>
     <b>麦爹的娱乐功能合集</b> —— 喜报 / 悲报 · 传统锦旗 · 一言 · 答案之书 · 今天吃什么 · 早晚安 · 今日宜忌 · 群友语录<br/>
     同时支持群聊指令与 <b>麦麦自主调用的 LLM 工具</b>，开箱即用、模块独立开关、支持群号黑白名单<br/>
-    <sub>部分功能移植自 <a href="https://github.com/Soulter/astrbot_plugin_essential">astrbot_plugin_essential</a>（Soulter / FateTrial）并针对 MaiBot 重构 · 当前版本 <b>1.7.1</b></sub>
+    <sub>部分功能移植自 <a href="https://github.com/Soulter/astrbot_plugin_essential">astrbot_plugin_essential</a>（Soulter / FateTrial）并针对 MaiBot 重构 · 当前版本 <b>1.7.2</b></sub>
   </p>
 
   <!-- Quick Navigation -->
@@ -244,6 +244,7 @@
 
 | 版本 | 日期 | 更新内容 |
 |---|---|---|
+| **1.7.2** | 2026-11-25 | **修复文字语录 Emoji 渲染为豆腐块**：内置 `assets/NotoColorEmoji.ttf`（Google Noto Color Emoji，OFL 1.1），支持正文与昵称彩色 Emoji 混排及复合序列（ZWJ / 肤色 / 国旗 / 键帽） |
 | **1.7.1** | 2026-11-24 | **修复文字语录头像下载分片截断 bug**（改用 `iter_chunked` 读满至 EOF，解决高清 QQ 头像被截断降级为首字图）；**新增 `/删语录` 命令**（支持回复图片/原消息删除及 `/删语录 最新`，并新增 `[quotes].delete_admin_users` 管理员配置） |
 | **1.7.0** | 2026-11-24 | **文字版群友语录自动生图**：`/投稿语录` 回复纯文字消息时自动拉取头像生成 MakeItAQuote 风格名言卡片（暖金色大引号、自适应正文字号、超长昵称完整换行）、收进语录库并立即发送一次；新增 `[quotes] text_quote_avatar_style`（`bw`/`color`）与 `text_quote_date_style`（`chinese`/`dot`/`none`）配置；新增 `chat.get_avatar` 能力声明；`sdk.max_version` 扩至 `2.23.99` |
 | **1.6.6** | 2026-11-09 | 兼容声明扩展（无功能变更）：`host_application.max_version` 扩至 `1.4.99`，`sdk.max_version` 扩至 `2.22.99` |
@@ -306,4 +307,5 @@
 - 早晚安玩法灵感：[nonebot_plugin_morning](https://github.com/MinatoAquaCrews/nonebot_plugin_morning)
 - 喜报 / 悲报字体：[Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC)（Google，SIL Open Font License 1.1，许可文本见 `assets/OFL.txt`，允许随本项目再分发）
 - 锦旗字体：[Ma Shan Zheng 马善政毛笔楷书](https://fonts.google.com/specimen/Ma+Shan+Zheng)（SIL Open Font License 1.1，许可文本见 `assets/OFL-MaShanZheng.txt`，允许随本项目再分发）
+- 语录 Emoji 字体：[Noto Color Emoji](https://github.com/googlefonts/noto-emoji)（Google，SIL Open Font License 1.1，许可文本见 `assets/OFL-NotoColorEmoji.txt`，允许随本项目再分发）
 - 锦旗玩法参考：[锦旗制作](http://www.ssbbww.com/b/h5.aspx)
